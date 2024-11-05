@@ -1,0 +1,1 @@
+这个仓库是用Rusttb等软件包来实现通过wannier90或者自己构建的tight-binding 模型来计算各种输运性质

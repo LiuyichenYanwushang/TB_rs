@@ -1,0 +1,19 @@
+[package]
+name = "Rustb4py"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "Rustb4py"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.20.0", features = ["extension-module"] }
+ndarray = { version = "0.15.6", features = ["rayon", "matrixmultiply-threading"] }  # Remove "blas" feature
+num-complex = "0.4.4"
+ndarray-linalg = { version = "0.16.0",features=["intel-mkl-static"]}  # Ensure no BLAS-related features are enabled
+numpy = "0.20.0"
+Rustb = { path = "../Rustb" }
+

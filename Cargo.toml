@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "TB_rs",
+  "Rustb",
+  "Rustb4py",
+]
+resolver = "2"

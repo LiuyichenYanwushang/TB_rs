@@ -5,3 +5,9 @@ members = [
   "Rustb4py",
 ]
 resolver = "2"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt_level=3
+panic = 'abort'

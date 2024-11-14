@@ -21,8 +21,8 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
 use std::path::Path;
-use Rustb::*;
 use Rustb::phy_const::*;
+use Rustb::*;
 
 #[derive(Debug)]
 struct Control {
@@ -86,7 +86,7 @@ fn main() {
             let parts: Vec<&str> = i.split('=').collect();
             if parts.len() == 2 {
                 seed_name.seed_name = Some(String::from(parts[1].trim()));
-                if rank==0{
+                if rank == 0 {
                     println!("seed_name: {}", parts[1].trim());
                 }
 
@@ -101,7 +101,7 @@ fn main() {
             let parts: Vec<&str> = i.split('=').collect();
             if parts.len() == 2 {
                 seed_name.fermi_energy = parts[1].trim().parse::<f64>().unwrap();
-                if rank==0{
+                if rank == 0 {
                     println!("seed_name: {}", parts[1].trim());
                 }
                 writeln!(
@@ -162,8 +162,8 @@ fn main() {
             for i in 1..size {
                 let start = (i as usize) * chunk_size;
                 let end = cmp::min(start + chunk_size, Kpath.nk());
-                if start >= end{
-                    break
+                if start >= end {
+                    break;
                 }
                 let chunk: Array2<f64> = kvec.slice(s![start..end, ..]).to_owned();
                 let mut chunk: Vec<f64> = chunk.into_iter().collect();
@@ -276,81 +276,103 @@ fn main() {
             //然后将余数分给排头靠前的rank
             let mut nk = optical_parameter.nk();
             world.process_at_rank(0).broadcast_into(&mut nk);
-            let remainder:usize=nk%size as usize;
-            let chunk_size0=nk/size as usize;
-            if chunk_size0==0{
-                panic!("Error! the num of cpu {} is larger than your k points number {}!",nk,size);
+            let remainder: usize = nk % size as usize;
+            let chunk_size0 = nk / size as usize;
+            if chunk_size0 == 0 {
+                panic!(
+                    "Error! the num of cpu {} is larger than your k points number {}!",
+                    nk, size
+                );
             }
-            println!("remainder={},chunk_size0={}",remainder,chunk_size0);
-            let chunk_size=if remainder > 0{
-                chunk_size0+1
-            }else{
+            println!("remainder={},chunk_size0={}", remainder, chunk_size0);
+            let chunk_size = if remainder > 0 {
+                chunk_size0 + 1
+            } else {
                 chunk_size0
             };
-            let mut start=chunk_size;
-            let mut end=0;
+            let mut start = chunk_size;
+            let mut end = 0;
             for i in 1..size {
-                let chunk_size=if (i as usize) < remainder{
-                    chunk_size0+1
-                }else{
+                let chunk_size = if (i as usize) < remainder {
+                    chunk_size0 + 1
+                } else {
                     chunk_size0
                 };
                 world.process_at_rank(i).send(&chunk_size);
-                end=start+chunk_size;
+                end = start + chunk_size;
                 let chunk: Array2<f64> = kvec.slice(s![start..end, ..]).to_owned();
                 let mut chunk: Vec<f64> = chunk.into_iter().collect();
                 world.process_at_rank(i).send(&chunk);
-                start=end;
+                start = end;
             }
             //分发结束
             let chunk = kvec.slice(s![0..chunk_size, ..]).to_owned();
-            let (mut matric, mut omega): (Array2<Complex<f64>>, Array2<Complex<f64>>) = Optical_conductivity(&model, &chunk, optical_parameter);
+            let (mut matric, mut omega): (Array2<Complex<f64>>, Array2<Complex<f64>>) =
+                Optical_conductivity(&model, &chunk, optical_parameter);
 
-            for i in 1..size{
+            for i in 1..size {
                 let mut received_size: usize = 0;
                 world.process_at_rank(i).receive_into(&mut received_size);
                 let mut received_data = vec![0u8; received_size];
-                world .process_at_rank(i).receive_into(&mut received_data[..]);
+                world
+                    .process_at_rank(i)
+                    .receive_into(&mut received_data[..]);
                 // 反序列化
                 let matric0: Array2<Complex<f64>> = deserialize(&received_data).unwrap();
-                matric=matric+matric0;
-            
+                matric = matric + matric0;
+
                 let mut received_size: usize = 0;
                 world.process_at_rank(i).receive_into(&mut received_size);
                 let mut received_data = vec![0u8; received_size];
-                world .process_at_rank(i).receive_into(&mut received_data[..]);
+                world
+                    .process_at_rank(i)
+                    .receive_into(&mut received_data[..]);
                 // 反序列化
                 let omega0: Array2<Complex<f64>> = deserialize(&received_data).unwrap();
-                omega=omega+omega0;
+                omega = omega + omega0;
             }
-            let og= optical_parameter.og();
-            omega=omega/(nk as f64)/model.lat.det().unwrap()*Quantum_conductivity*1.0e8;
-            matric=matric/(nk as f64)/model.lat.det().unwrap()*Quantum_conductivity*1.0e8;
+            let og = optical_parameter.og();
+            omega = omega / (nk as f64) / model.lat.det().unwrap() * Quantum_conductivity * 1.0e8;
+            matric = matric / (nk as f64) / model.lat.det().unwrap() * Quantum_conductivity * 1.0e8;
             println!("The optical conductivity calculation is finished");
             writeln!(output_file, "calculation finished");
             //开始写入
-            writeln!(output_file,"write data in optical_conductivity_A.dat and optical_conductivity_S.dat");
-            let mut matric_file = File::create("optical_conductivity_S.dat").expect("Unable to create TB.in");
-            let mut input_string=String::new();
+            writeln!(
+                output_file,
+                "write data in optical_conductivity_A.dat and optical_conductivity_S.dat"
+            );
+            let mut matric_file =
+                File::create("optical_conductivity_S.dat").expect("Unable to create TB.in");
+            let mut input_string = String::new();
             input_string.push_str("#Calculation results are reported in units of Ω^-1 cm^-1\n");
-            input_string.push_str("#For symmetrical results, the arranged data are: omega, xx, yy, zz, xy, yz, xz\n");
-            for i in 0..matric.len_of(Axis(1)){
-                input_string.push_str(&format!("{:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}\n",og[[i]],matric[[0,i]],matric[[1,i]],matric[[2,i]],matric[[3,i]],matric[[4,i]],matric[[5,i]]));
+            input_string.push_str("#For symmetrical results, the arranged data are: omega, Re(xx, Im(xx), Re(yy), Im(yy), Re(zz), Im(zz), Re(xy), Im(xy), Re(yz), Im(yz), Re(xz), Im(xz)\n");
+            for i in 0..matric.len_of(Axis(1)) {
+                input_string.push_str(&format!("{:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}\n",og[[i]],matric[[0,i]].re,matric[[0,i]].im,matric[[1,i]].re,matric[[1,i]].im,matric[[2,i]].re,matric[[2,i]].im,matric[[3,i]].re,matric[[3,i]].im,matric[[4,i]].re,matric[[4,i]].im,matric[[5,i]].re,matric[[5,i]].im));
             }
-            writeln!(matric_file,"{}",&input_string);
+            writeln!(matric_file, "{}", &input_string);
 
-            let mut berry_file = File::create("optical_conductivity_A.dat").expect("Unable to create TB.in");
-            let mut input_string=String::new();
+            let mut berry_file =
+                File::create("optical_conductivity_A.dat").expect("Unable to create TB.in");
+            let mut input_string = String::new();
 
             input_string.push_str("#Calculation results are reported in units of Ω^-1 cm^-1\n");
-            input_string.push_str("#For symmetrical results, the arranged data are: omega, xy, yz, xz\n");
-            for i in 0..omega.len_of(Axis(1)){
-                input_string.push_str(&format!("{:11.8}    {:11.8}    {:11.8}    {:11.8}\n",og[[i]],omega[[0,i]],omega[[1,i]],omega[[2,i]]));
+            input_string.push_str("#For symmetrical results, the arranged data are: omega, Re(xy), Im(xy), Re(yz), Im(yz), Re(xz), Im(xz)\n");
+            for i in 0..omega.len_of(Axis(1)) {
+                input_string.push_str(&format!(
+                    "{:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}\n",
+                    og[[i]],
+                    omega[[0, i]].re,
+                    omega[[0, i]].im,
+                    omega[[1, i]].re,
+                    omega[[1, i]].im,
+                    omega[[2, i]].re,
+                    omega[[2, i]].im
+                ));
             }
-            writeln!(berry_file,"{}",&input_string);
-            writeln!(output_file,"writing end, now plotting");
+            writeln!(berry_file, "{}", &input_string);
+            writeln!(output_file, "writing end, now plotting");
             //开始绘图
-            
+
             let (og_min, og_max, n_og) = optical_parameter.omega();
             let mut fg = Figure::new();
             let x: Vec<f64> = og.to_vec();
@@ -360,24 +382,18 @@ fn main() {
             let y: Vec<f64> = matric.row(0).to_owned().map(|x| x.im).to_vec();
             axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
             let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(
-                None,
-                &[],
+            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_label(
+                "{/Symbol s}_{xx}^S (Ω^{-1} cm^{-1})",
                 &[Font("Times New Roman", 18.0)],
             );
-            axes.set_y_ticks(
-                None,
-                &[],
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_y_label("sigma_{xx}^S (Ω^{-1} cm^{-1})", &[Font("Times New Roman", 18.0)]);
-            axes.set_x_label("{\\hbar}ω (eV)", &[Font("Times New Roman", 18.0)]);
+            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
             let mut pdf_name = String::new();
             pdf_name.push_str("sig_xx_S.pdf");
             fg.set_terminal("pdfcairo", &pdf_name);
             fg.show();
-
 
             let mut fg = Figure::new();
             let x: Vec<f64> = og.to_vec();
@@ -387,18 +403,13 @@ fn main() {
             let y: Vec<f64> = matric.row(1).to_owned().map(|x| x.im).to_vec();
             axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
             let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(
-                None,
-                &[],
+            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_label(
+                "{/Symbol s}_{yy}^S (Ω^{-1} cm^{-1})",
                 &[Font("Times New Roman", 18.0)],
             );
-            axes.set_y_ticks(
-                None,
-                &[],
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_y_label("sigma_{yy}^S (Ω^{-1} cm^{-1})", &[Font("Times New Roman", 18.0)]);
-            axes.set_x_label("{\\hbar}ω (eV)", &[Font("Times New Roman", 18.0)]);
+            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
             let mut pdf_name = String::new();
             pdf_name.push_str("sig_yy_S.pdf");
@@ -413,24 +424,18 @@ fn main() {
             let y: Vec<f64> = matric.row(2).to_owned().map(|x| x.im).to_vec();
             axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
             let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(
-                None,
-                &[],
+            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_label(
+                "{/Symbol s}_{zz}^S (Ω^{-1} cm^{-1})",
                 &[Font("Times New Roman", 18.0)],
             );
-            axes.set_y_ticks(
-                None,
-                &[],
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_y_label("sigma_{zz}^S (Ω^{-1} cm^{-1})", &[Font("Times New Roman", 18.0)]);
-            axes.set_x_label("{\\hbar}ω (eV)", &[Font("Times New Roman", 18.0)]);
+            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
             let mut pdf_name = String::new();
             pdf_name.push_str("sig_zz_S.pdf");
             fg.set_terminal("pdfcairo", &pdf_name);
             fg.show();
-
 
             let mut fg = Figure::new();
             let x: Vec<f64> = og.to_vec();
@@ -440,24 +445,18 @@ fn main() {
             let y: Vec<f64> = matric.row(3).to_owned().map(|x| x.im).to_vec();
             axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
             let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(
-                None,
-                &[],
+            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_label(
+                "{/Symbol s}_{xy}^S (Ω^{-1} cm^{-1})",
                 &[Font("Times New Roman", 18.0)],
             );
-            axes.set_y_ticks(
-                None,
-                &[],
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_y_label("sigma_{xy}^S (Ω^{-1} cm^{-1})", &[Font("Times New Roman", 18.0)]);
-            axes.set_x_label("{\\hbar}ω (eV)", &[Font("Times New Roman", 18.0)]);
+            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
             let mut pdf_name = String::new();
             pdf_name.push_str("sig_xy_S.pdf");
             fg.set_terminal("pdfcairo", &pdf_name);
             fg.show();
-
 
             let mut fg = Figure::new();
             let x: Vec<f64> = og.to_vec();
@@ -467,24 +466,18 @@ fn main() {
             let y: Vec<f64> = matric.row(4).to_owned().map(|x| x.im).to_vec();
             axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
             let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(
-                None,
-                &[],
+            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_label(
+                "{/Symbol s}_{yz}^S (Ω^{-1} cm^{-1})",
                 &[Font("Times New Roman", 18.0)],
             );
-            axes.set_y_ticks(
-                None,
-                &[],
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_y_label("sigma_{yz}^S (Ω^{-1} cm^{-1})", &[Font("Times New Roman", 18.0)]);
-            axes.set_x_label("{\\hbar}ω (eV)", &[Font("Times New Roman", 18.0)]);
+            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
             let mut pdf_name = String::new();
             pdf_name.push_str("sig_yz_S.pdf");
             fg.set_terminal("pdfcairo", &pdf_name);
             fg.show();
-
 
             let mut fg = Figure::new();
             let x: Vec<f64> = og.to_vec();
@@ -494,25 +487,18 @@ fn main() {
             let y: Vec<f64> = matric.row(5).to_owned().map(|x| x.im).to_vec();
             axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
             let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(
-                None,
-                &[],
+            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_label(
+                "{/Symbol s}_{xz}^S (Ω^{-1} cm^{-1})",
                 &[Font("Times New Roman", 18.0)],
             );
-            axes.set_y_ticks(
-                None,
-                &[],
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_y_label("sigma_{xz}^S (Ω^{-1} cm^{-1})", &[Font("Times New Roman", 18.0)]);
-            axes.set_x_label("{\\hbar}ω (eV)", &[Font("Times New Roman", 18.0)]);
+            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
             let mut pdf_name = String::new();
             pdf_name.push_str("sig_xz_S.pdf");
             fg.set_terminal("pdfcairo", &pdf_name);
             fg.show();
-
-
 
             let mut fg = Figure::new();
             let x: Vec<f64> = og.to_vec();
@@ -522,24 +508,18 @@ fn main() {
             let y: Vec<f64> = omega.row(0).to_owned().map(|x| x.im).to_vec();
             axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
             let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(
-                None,
-                &[],
+            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_label(
+                "{/Symbol s}_{xy}^A (Ω^{-1} cm^{-1})",
                 &[Font("Times New Roman", 18.0)],
             );
-            axes.set_y_ticks(
-                None,
-                &[],
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_y_label("sigma_{xy}^A (Ω^{-1} cm^{-1})", &[Font("Times New Roman", 18.0)]);
-            axes.set_x_label("{\\hbar}ω (eV)", &[Font("Times New Roman", 18.0)]);
+            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
             let mut pdf_name = String::new();
             pdf_name.push_str("sig_xy_A.pdf");
             fg.set_terminal("pdfcairo", &pdf_name);
             fg.show();
-
 
             let mut fg = Figure::new();
             let x: Vec<f64> = og.to_vec();
@@ -549,24 +529,18 @@ fn main() {
             let y: Vec<f64> = omega.row(1).to_owned().map(|x| x.im).to_vec();
             axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
             let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(
-                None,
-                &[],
+            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_label(
+                "{/Symbol s}_{yz}^A (Ω^{-1} cm^{-1})",
                 &[Font("Times New Roman", 18.0)],
             );
-            axes.set_y_ticks(
-                None,
-                &[],
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_y_label("sigma_{yz}^A (Ω^{-1} cm^{-1})", &[Font("Times New Roman", 18.0)]);
-            axes.set_x_label("{\\hbar}ω (eV)", &[Font("Times New Roman", 18.0)]);
+            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
             let mut pdf_name = String::new();
             pdf_name.push_str("sig_yz_A.pdf");
             fg.set_terminal("pdfcairo", &pdf_name);
             fg.show();
-
 
             let mut fg = Figure::new();
             let x: Vec<f64> = og.to_vec();
@@ -576,18 +550,13 @@ fn main() {
             let y: Vec<f64> = omega.row(2).to_owned().map(|x| x.im).to_vec();
             axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
             let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(
-                None,
-                &[],
+            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_label(
+                "{/Symbol s}_{xz}^A (Ω^{-1} cm^{-1})",
                 &[Font("Times New Roman", 18.0)],
             );
-            axes.set_y_ticks(
-                None,
-                &[],
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_y_label("sigma_{xz}^A (Ω^{-1} cm^{-1})", &[Font("Times New Roman", 18.0)]);
-            axes.set_x_label("{\\hbar}ω (eV)", &[Font("Times New Roman", 18.0)]);
+            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
             let mut pdf_name = String::new();
             pdf_name.push_str("sig_xz_A.pdf");
@@ -622,13 +591,13 @@ fn main() {
             let mut serialized_data = serialize(&matric).unwrap();
             let mut data_size = serialized_data.len();
             world.process_at_rank(0).send(&mut data_size);
-            world .process_at_rank(0) .send(&mut serialized_data[..]);
+            world.process_at_rank(0).send(&mut serialized_data[..]);
 
             //再传输 omega 到rank0
             let mut serialized_data = serialize(&omega).unwrap();
             let mut data_size = serialized_data.len();
             world.process_at_rank(0).send(&mut data_size);
-            world .process_at_rank(0) .send(&mut serialized_data[..]);
+            world.process_at_rank(0).send(&mut serialized_data[..]);
         }
     }
 }

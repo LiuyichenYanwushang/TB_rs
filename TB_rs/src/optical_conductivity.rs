@@ -28,7 +28,7 @@ impl Op_conductivity {
     pub fn new() -> Self {
         Op_conductivity {
             k_mesh: [1, 1, 1],
-            eta: 1e-8,
+            eta: 1e-3,
             omega_min: 0.0,
             omega_max: 1.0,
             omega_num: 10,
@@ -198,7 +198,7 @@ impl Op_conductivity {
                         (k as f64) / (self.k_mesh[2] as f64)
                     ];
                     kvec.row_mut(i0).assign(&k0);
-                    i0+=1;
+                    i0 += 1;
                 }
             }
         }
@@ -244,7 +244,7 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
     let li: Complex<f64> = 1.0 * Complex::i();
     let (band, evec) = model.solve_onek(&k_vec);
 
-    let mut v: Array3<Complex<f64>> = model.gen_v(k_vec);
+    let v: Array3<Complex<f64>> = model.gen_v(k_vec);
 
     let evec_conj: Array2<Complex<f64>> = evec.mapv(|x| x.conj());
     let evec = evec.t();
@@ -276,11 +276,6 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
     let fermi_dirac = fermi_dirac.mapv(|x| Complex::new(x, 0.0));
 
     let n_og = og.len();
-    assert_eq!(
-        band.len(),
-        nsta,
-        "this is strange for band's length is not equal to nsta"
-    );
 
     let mut matric_n = Array2::zeros((6, n_og));
     let mut omega_n = Array2::zeros((3, n_og));
@@ -291,12 +286,12 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
         .and(v.outer_iter())
         .apply(|mut a, v| a.assign(&evec_conj.dot(&v.dot(&evec))));
 
-    let A_xx = &A.slice(s![0, .., ..]) * &A.slice(s![0, .., ..]).t();
-    let A_yy = &A.slice(s![1, .., ..]) * &A.slice(s![1, .., ..]).t();
-    let A_zz = &A.slice(s![2, .., ..]) * &A.slice(s![2, .., ..]).t();
-    let A_xy = &A.slice(s![0, .., ..]) * &A.slice(s![1, .., ..]).t();
-    let A_yz = &A.slice(s![1, .., ..]) * &A.slice(s![2, .., ..]).t();
-    let A_xz = &A.slice(s![0, .., ..]) * &A.slice(s![2, .., ..]).t();
+    let A_xx = &A.slice(s![0, .., ..]) * (&A.slice(s![0, .., ..]).reversed_axes());
+    let A_yy = &A.slice(s![1, .., ..]) * (&A.slice(s![1, .., ..]).reversed_axes());
+    let A_zz = &A.slice(s![2, .., ..]) * (&A.slice(s![2, .., ..]).reversed_axes());
+    let A_xy = &A.slice(s![0, .., ..]) * (&A.slice(s![1, .., ..]).reversed_axes());
+    let A_yz = &A.slice(s![1, .., ..]) * (&A.slice(s![2, .., ..]).reversed_axes());
+    let A_xz = &A.slice(s![0, .., ..]) * (&A.slice(s![2, .., ..]).reversed_axes());
     let re_xx: Array2<Complex<f64>> = Complex::new(2.0, 0.0) * A_xx;
     let re_yy: Array2<Complex<f64>> = Complex::new(2.0, 0.0) * A_yy;
     let re_zz: Array2<Complex<f64>> = Complex::new(2.0, 0.0) * A_zz;
@@ -315,7 +310,7 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
         .and(matric_n.axis_iter_mut(Axis(1)))
         .and(og.view())
         .apply(|mut omega, mut matric, a0| {
-            let li_eta = a0 + li * eta;
+            let li_eta = *a0 + li * eta;
             let UU = U0.mapv(|x| (x * x - li_eta * li_eta).finv());
             let U1 = &UU * &Us * li_eta;
             let o_xy = im_xy

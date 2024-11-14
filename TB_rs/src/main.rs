@@ -241,7 +241,7 @@ fn main() {
             }
             let have_T = optical_parameter.get_T(&Input_reads);
             let have_mu = optical_parameter.get_mu(&Input_reads);
-            let have_eta = optical_parameter.get_omega(&Input_reads);
+            let have_eta = optical_parameter.get_eta(&Input_reads);
             let have_omega = optical_parameter.get_omega(&Input_reads);
             if !(have_omega) {
                 writeln!(

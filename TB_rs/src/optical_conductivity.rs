@@ -1,7 +1,11 @@
+use std::time::{Duration, Instant};
 use ndarray::*;
-use std::ops::AddAssign;
+use ndarray_linalg::conjugate;
+use ndarray_linalg::Eigh;
+use ndarray_linalg::UPLO;
 use num_complex::Complex;
 use serde::{Deserialize, Serialize};
+use std::ops::AddAssign;
 use Rustb::Model;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -218,117 +222,159 @@ impl Op_conductivity {
 /// \\end{aligned}
 /// $$
 
-pub fn optical_geometry_onek<S: Data<Elem = f64>>(model:&Model,k_vec:&ArrayBase<S,Ix1>,T:f64,mu:f64,og:&Array1<f64>,eta:f64)->(Array2<Complex::<f64>>,Array2<Complex::<f64>>){
-    //!给定一个 k 点, 指定 dir_1=$\alpha$, dir_2=$\beta$, T 代表温度, og= $\og$, 
+pub fn optical_geometry_onek<S: Data<Elem = f64>>(
+    model: &Model,
+    k_vec: &ArrayBase<S, Ix1>,
+    T: f64,
+    mu: f64,
+    og: &Array1<f64>,
+    eta: f64,
+) -> (Array2<Complex<f64>>, Array2<Complex<f64>>) {
+    //!给定一个 k 点, 指定 dir_1=$\alpha$, dir_2=$\beta$, T 代表温度, og= $\og$,
     //!mu=$\mu$ 为费米能级, spin=0,1,2,3 为$\sg_0,\sg_x,\sg_y,\sg_z$,
     //!当体系不存在自旋的时候无论如何输入spin都默认 spin=0
     //!eta=$\eta$ 是一个小量
-    //! 这个函数返回的是 
+    //! 这个函数返回的是
     //! $$ \sum_n f_n\Omega_{n,\ap\bt}^\gm(\bm k)=\sum_n \f{1}{e^{(\ve_{n\bm k}-\mu)/T/k_B}+1} \sum_{m=\not n}\f{J_{\ap,nm}^\gm v_{\bt,mn}}{(\ve_{n\bm k}-\ve_{m\bm k})^2-(\og+i\eta)^2}$$
     //! 其中 $J_\ap^\gm=\\{s_\gm,v_\ap\\}$
-    let li:Complex<f64>=1.0*Complex::i();
-    let (band,evec)=model.solve_onek(&k_vec);
-    let mut v:Array3::<Complex<f64>>=model.gen_v(k_vec);
-    let evec_conj: Array2<Complex<f64>> = evec.mapv(|x| x.conj());
-    let evec = evec.t();
+    let li: Complex<f64> = 1.0 * Complex::i();
+    let (mut A, hamk): (Array3<Complex<f64>>, Array2<Complex<f64>>) = model.gen_v(k_vec);
+    let (band, evec) = if let Ok((eigvals, eigvecs)) = hamk.eigh(UPLO::Lower) {
+        (eigvals, eigvecs)
+    } else {
+        todo!()
+    };
+    let evec_conj = evec.t();
+    let evec = evec.mapv(|x| x.conj());
 
+    //Zip::from(A.outer_iter_mut()) .apply(|mut a| a.assign(&evec_conj.dot(&a.dot(&evec))));
 
-    let mut A=Array3::zeros((3,model.nsta(),model.nsta()));
-    Zip::from(A.outer_iter_mut())
-        .and(v.outer_iter())
-        .apply(|mut a, v| a.assign(&evec_conj.dot(&v.dot(&evec))));
-
+    let A_x:Array2<Complex<f64>>=A.slice(s![0,..,..]).to_owned();
+    let A_y:Array2<Complex<f64>>=A.slice(s![1,..,..]).to_owned();
+    let A_z:Array2<Complex<f64>>=A.slice(s![2,..,..]).to_owned();
+    let A_x=A_x.dot(&evec);
+    let A_y=A_y.dot(&evec);
+    let A_z=A_z.dot(&evec);
+    let A_x=evec_conj.dot(&A_x);
+    let A_y=evec_conj.dot(&A_y);
+    let A_z=evec_conj.dot(&A_z);
+    /*
     let A_xx = &A.slice(s![0, .., ..]) * (&A.slice(s![0, .., ..]).reversed_axes());
     let A_yy = &A.slice(s![1, .., ..]) * (&A.slice(s![1, .., ..]).reversed_axes());
     let A_zz = &A.slice(s![2, .., ..]) * (&A.slice(s![2, .., ..]).reversed_axes());
     let A_xy = &A.slice(s![0, .., ..]) * (&A.slice(s![1, .., ..]).reversed_axes());
     let A_yz = &A.slice(s![1, .., ..]) * (&A.slice(s![2, .., ..]).reversed_axes());
     let A_xz = &A.slice(s![0, .., ..]) * (&A.slice(s![2, .., ..]).reversed_axes());
+    let mut A_xx = Array2::zeros((model.nsta(),model.nsta()));
+    let mut A_yy = Array2::zeros((model.nsta(),model.nsta()));
+    let mut A_zz = Array2::zeros((model.nsta(),model.nsta()));
+    let mut A_xy = Array2::zeros((model.nsta(),model.nsta()));
+    let mut A_yz = Array2::zeros((model.nsta(),model.nsta()));
+    let mut A_xz = Array2::zeros((model.nsta(),model.nsta()));
+    */
 
+    let og = og.mapv(|x| x + li * eta);
+    let n_og = og.len();
+    let mut omega_H = Array2::zeros((6, n_og));
+    let mut omega_aH = Array2::zeros((6, n_og));
 
-
-    let og=og.mapv(|x| x+li*eta);
-    let n_og=og.len();
-    let mut omega_H=Array2::zeros((6,n_og));
-    let mut omega_aH=Array2::zeros((6,n_og));
-
-    let mut UU=Array2::zeros((model.nsta(),model.nsta()));
-    for i in 0..model.nsta(){
-        for j in 0..model.nsta(){
-            UU[[i,j]]=band[[j]]-band[[i]];
+    let mut UU = Array2::zeros((model.nsta(), model.nsta()));
+    for i in 0..model.nsta() {
+        for j in 0..model.nsta() {
+            UU[[i, j]] = band[[j]] - band[[i]];
+            /*
+            A_xx[[i,j]] =A_x[[i,j]]*A_x[[j,i]];
+            A_yy[[i,j]] =A_y[[i,j]]*A_y[[j,i]];
+            A_zz[[i,j]] =A_z[[i,j]]*A_z[[j,i]];
+            A_xy[[i,j]] =A_x[[i,j]]*A_y[[j,i]];
+            A_yz[[i,j]] =A_y[[i,j]]*A_z[[j,i]];
+            A_xz[[i,j]] =A_x[[i,j]]*A_z[[j,i]];
+            */
         }
     }
 
-    if T == 0.0{
-        let nocc:usize=band.fold(0, |acc,x| if *x > 0.0 {acc} else {acc+1});
-        og.iter().zip(omega_H.axis_iter_mut(Axis(1)).zip(omega_aH.axis_iter_mut(Axis(1)))).for_each(|(a0,(mut oH,mut oaH))|{
-            for i in 0..nocc{
-                for j in nocc..model.nsta(){
-                    let U0=(UU[[i,j]]*(UU[[i,j]]-a0)).finv();
-                    oH[[0]]+=A_xx[[i,j]]*U0.im;
-                    oH[[1]]+=A_yy[[i,j]]*U0.im;
-                    oH[[2]]+=A_zz[[i,j]]*U0.im;
-                    oH[[3]]+=A_xy[[i,j]]*U0.im;
-                    oH[[4]]+=A_yz[[i,j]]*U0.im;
-                    oH[[5]]+=A_xz[[i,j]]*U0.im;
-                    oaH[[0]]-=A_xx[[i,j]]*U0.re*li;
-                    oaH[[1]]-=A_yy[[i,j]]*U0.re*li;
-                    oaH[[2]]-=A_zz[[i,j]]*U0.re*li;
-                    oaH[[3]]-=A_xy[[i,j]]*U0.re*li;
-                    oaH[[4]]-=A_yz[[i,j]]*U0.re*li;
-                    oaH[[5]]-=A_xz[[i,j]]*U0.re*li;
+
+    let A_xx=&A_x*(&A_x.t());
+    let A_yy=&A_y*(&A_y.t());
+    let A_zz=&A_z*(&A_z.t());
+    let A_xy=&A_x*(&A_y.t());
+    let A_yz=&A_y*(&A_z.t());
+    let A_xz=&A_x*(&A_z.t());
+
+    if T == 0.0 {
+        let nocc: usize = band.fold(0, |acc, x| if *x > 0.0 { acc } else { acc + 1 });
+        og.iter()
+            .zip(
+                omega_H
+                    .axis_iter_mut(Axis(1))
+                    .zip(omega_aH.axis_iter_mut(Axis(1))),
+            )
+            .for_each(|(a0, (mut oH, mut oaH))| {
+                for i in 0..nocc {
+                    for j in nocc..model.nsta() {
+                        let U0 = (UU[[i, j]] * (UU[[i, j]] - a0)).finv();
+                        oH[[0]] += A_xx[[i,j]] * U0.im;
+                        oH[[1]] += A_yy[[i,j]] * U0.im;
+                        oH[[2]] += A_zz[[i,j]] * U0.im;
+                        oH[[3]] += A_xy[[i,j]] * U0.im;
+                        oH[[4]] += A_yz[[i,j]] * U0.im;
+                        oH[[5]] += A_xz[[i,j]] * U0.im;
+                        oaH[[0]] -= A_xx[[i,j]] * U0.re*li;
+                        oaH[[1]] -= A_yy[[i,j]] * U0.re*li;
+                        oaH[[2]] -= A_zz[[i,j]] * U0.re*li;
+                        oaH[[3]] -= A_xy[[i,j]] * U0.re*li;
+                        oaH[[4]] -= A_yz[[i,j]] * U0.re*li;
+                        oaH[[5]] -= A_xz[[i,j]] * U0.re*li;
+
+
+                        let U0 = (UU[[i, j]] * (UU[[j, i]] - a0)).finv();
+                        oH[[0]] += A_xx[[i,j]] * U0.im;
+                        oH[[1]] += A_yy[[i,j]] * U0.im;
+                        oH[[2]] += A_zz[[i,j]] * U0.im;
+                        oH[[3]] += A_xy[[i,j]] * U0.im;
+                        oH[[4]] += A_yz[[i,j]] * U0.im;
+                        oH[[5]] += A_xz[[i,j]] * U0.im;
+                        oaH[[0]] -= A_xx[[i,j]] * U0.re*li;
+                        oaH[[1]] -= A_yy[[i,j]] * U0.re*li;
+                        oaH[[2]] -= A_zz[[i,j]] * U0.re*li;
+                        oaH[[3]] -= A_xy[[i,j]] * U0.re*li;
+                        oaH[[4]] -= A_yz[[i,j]] * U0.re*li;
+                        oaH[[5]] -= A_xz[[i,j]] * U0.re*li;
+                    }
                 }
-            }
-            for i in nocc..model.nsta(){
-                for j in 0..nocc{
-                    let U0=-(UU[[i,j]]*(UU[[i,j]]-a0)).finv();
-                    oH[[0]]+=A_xx[[i,j]]*U0.im;
-                    oH[[1]]+=A_yy[[i,j]]*U0.im;
-                    oH[[2]]+=A_zz[[i,j]]*U0.im;
-                    oH[[3]]+=A_xy[[i,j]]*U0.im;
-                    oH[[4]]+=A_yz[[i,j]]*U0.im;
-                    oH[[5]]+=A_xz[[i,j]]*U0.im;
-                    oaH[[0]]-=A_xx[[i,j]]*U0.re*li;
-                    oaH[[1]]-=A_yy[[i,j]]*U0.re*li;
-                    oaH[[2]]-=A_zz[[i,j]]*U0.re*li;
-                    oaH[[3]]-=A_xy[[i,j]]*U0.re*li;
-                    oaH[[4]]-=A_yz[[i,j]]*U0.re*li;
-                    oaH[[5]]-=A_xz[[i,j]]*U0.re*li;
-                }
-            }
-        });
-    }else{
+            });
+    } else {
         let beta = 1.0 / T / 8.617e-5;
-        let fermi_dirac=band.mapv(|x| ((beta * (x - mu)).exp() + 1.0).recip());
-        og.iter().zip(omega_H.axis_iter_mut(Axis(1)).zip(omega_aH.axis_iter_mut(Axis(1)))).for_each(|(a0,(mut oH,mut oaH))|{
-
-            let mut U0_im=Array2::zeros((model.nsta(),model.nsta()));
-            let mut U0_re_li=Array2::zeros((model.nsta(),model.nsta()));
-            for i in 0..model.nsta(){
-                for j in 0..model.nsta(){
-                    let U0=(fermi_dirac[i]-fermi_dirac[j])*(UU[[i,j]]*(UU[[i,j]]-a0)).finv();
-                    U0_im[[i,j]]=U0.im;
-                    U0_re_li[[i,j]]=U0.re*li;
+        let fermi_dirac = band.mapv(|x| ((beta * (x - mu)).exp() + 1.0).recip());
+        og.iter()
+            .zip(
+                omega_H
+                    .axis_iter_mut(Axis(1))
+                    .zip(omega_aH.axis_iter_mut(Axis(1))),
+            )
+            .for_each(|(a0, (mut oH, mut oaH))| {
+                for i in 0..model.nsta() {
+                    for j in 0..model.nsta() {
+                        let U0 = (fermi_dirac[i] - fermi_dirac[j])
+                            * (UU[[i, j]] * (UU[[i, j]] - a0)).finv();
+                        oH[[0]] += A_xx[[i,j]] * U0.im;
+                        oH[[1]] += A_yy[[i,j]] * U0.im;
+                        oH[[2]] += A_zz[[i,j]] * U0.im;
+                        oH[[3]] += A_xy[[i,j]] * U0.im;
+                        oH[[4]] += A_yz[[i,j]] * U0.im;
+                        oH[[5]] += A_xz[[i,j]] * U0.im;
+                        oaH[[0]] -= A_xx[[i,j]] * U0.re*li;
+                        oaH[[1]] -= A_yy[[i,j]] * U0.re*li;
+                        oaH[[2]] -= A_zz[[i,j]] * U0.re*li;
+                        oaH[[3]] -= A_xy[[i,j]] * U0.re*li;
+                        oaH[[4]] -= A_yz[[i,j]] * U0.re*li;
+                        oaH[[5]] -= A_xz[[i,j]] * U0.re*li;
+                    }
                 }
-            }
-            oH[[0]]=(&A_xx*&U0_im).sum();
-            oH[[1]]=(&A_yy*&U0_im).sum();
-            oH[[2]]=(&A_zz*&U0_im).sum();
-            oH[[3]]=(&A_xy*&U0_im).sum();
-            oH[[4]]=(&A_yz*&U0_im).sum();
-            oH[[5]]=(&A_xz*&U0_im).sum();
-            oaH[[0]]=-(&A_xx*&U0_re_li).sum();
-            oaH[[1]]=-(&A_yy*&U0_re_li).sum();
-            oaH[[2]]=-(&A_zz*&U0_re_li).sum();
-            oaH[[3]]=-(&A_xy*&U0_re_li).sum();
-            oaH[[4]]=-(&A_yz*&U0_re_li).sum();
-            oaH[[5]]=-(&A_xz*&U0_re_li).sum();
-        });
-
+            });
     }
-    (omega_H,omega_aH)
+    (omega_H, omega_aH)
 }
-
 
 pub fn Optical_conductivity(
     model: &Model,
@@ -343,15 +389,16 @@ pub fn Optical_conductivity(
     let (og_min, og_max, n_og) = optical_parameter.omega();
     let mut matric = Array2::zeros((6, n_og));
     let mut omega = Array2::zeros((3, n_og));
-    for k in kvec.outer_iter() {
+    //let mut a=Instant::now();
+    for (i,k) in kvec.outer_iter().enumerate() {
         let (omega_H, omega_aH) = optical_geometry_onek(&model, &k, T, mu, &og, eta);
 
-        let sig_xx: Array1<Complex<f64>> = &omega_H.row(0).mapv(|x| Complex::new(x.re,0.0))+&omega_aH.row(0).mapv(|x| x.im*li);
-        let sig_yy: Array1<Complex<f64>> = &omega_H.row(1).mapv(|x| Complex::new(x.re,0.0))+&omega_aH.row(2).mapv(|x| x.im*li);
-        let sig_zz: Array1<Complex<f64>> = &omega_H.row(2).mapv(|x| Complex::new(x.re,0.0))+&omega_aH.row(2).mapv(|x| x.im*li);
-        let sig_xy: Array1<Complex<f64>> = &omega_H.row(3).mapv(|x| Complex::new(x.re,0.0))+&omega_aH.row(3).mapv(|x| x.im*li);
-        let sig_yz: Array1<Complex<f64>> = &omega_H.row(4).mapv(|x| Complex::new(x.re,0.0))+&omega_aH.row(4).mapv(|x| x.im*li);
-        let sig_xz: Array1<Complex<f64>> = &omega_H.row(5).mapv(|x| Complex::new(x.re,0.0))+&omega_aH.row(5).mapv(|x| x.im*li);
+        let sig_xx: Array1<Complex<f64>> = &omega_H.row(0).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(0).mapv(|x| x.im * li);
+        let sig_yy: Array1<Complex<f64>> = &omega_H.row(1).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(1).mapv(|x| x.im * li);
+        let sig_zz: Array1<Complex<f64>> = &omega_H.row(2).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(2).mapv(|x| x.im * li);
+        let sig_xy: Array1<Complex<f64>> = &omega_H.row(3).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(3).mapv(|x| x.im * li);
+        let sig_yz: Array1<Complex<f64>> = &omega_H.row(4).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(4).mapv(|x| x.im * li);
+        let sig_xz: Array1<Complex<f64>> = &omega_H.row(5).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(5).mapv(|x| x.im * li);
         matric.row_mut(0).add_assign(&sig_xx);
         matric.row_mut(1).add_assign(&sig_yy);
         matric.row_mut(2).add_assign(&sig_zz);
@@ -359,12 +406,14 @@ pub fn Optical_conductivity(
         matric.row_mut(4).add_assign(&sig_yz);
         matric.row_mut(5).add_assign(&sig_xz);
 
-        let sig_xy: Array1<Complex<f64>> = &omega_aH.row(3).mapv(|x| x.re+0.0*li)+&omega_H.row(3).mapv(|x| x.im*li);
-        let sig_yz: Array1<Complex<f64>> = &omega_aH.row(4).mapv(|x| x.re+0.0*li)+&omega_H.row(4).mapv(|x| x.im*li);
-        let sig_xz: Array1<Complex<f64>> = &omega_aH.row(5).mapv(|x| x.re+0.0*li)+&omega_H.row(5).mapv(|x| x.im*li);
+        let sig_xy: Array1<Complex<f64>> = &omega_aH.row(3).mapv(|x| x.re + 0.0 * li) + &omega_H.row(3).mapv(|x| x.im * li);
+        let sig_yz: Array1<Complex<f64>> = &omega_aH.row(4).mapv(|x| x.re + 0.0 * li) + &omega_H.row(4).mapv(|x| x.im * li);
+        let sig_xz: Array1<Complex<f64>> = &omega_aH.row(5).mapv(|x| x.re + 0.0 * li) + &omega_H.row(5).mapv(|x| x.im * li);
         omega.row_mut(0).add_assign(&sig_xy);
         omega.row_mut(1).add_assign(&sig_yz);
         omega.row_mut(2).add_assign(&sig_xz);
+
+
     }
     (matric, omega)
 }

@@ -155,31 +155,50 @@ fn main() {
 
             let (kvec, kdist, knode, kname) = Kpath.get_path_vec(&model.lat);
             //开始将 kvec 平均分发给各个线程进行计算
-            //为了向上取整数, 所以要+size
-            let mut chunk_size = (Kpath.nk() + size as usize - 1) / size as usize;
             let nk = Kpath.nk();
-            world.process_at_rank(0).broadcast_into(&mut chunk_size);
+            let remainder: usize = nk % size as usize;
+            let chunk_size0 = nk / size as usize;
+            if chunk_size0 == 0 {
+                panic!(
+                    "Error! the num of cpu {} is larger than your k points number {}!",
+                    nk, size
+                );
+            }
+            let chunk_size = if remainder > 0 {
+                chunk_size0 + 1
+            } else {
+                chunk_size0
+            };
+            let mut start = chunk_size;
+            let mut end = 0;
             for i in 1..size {
-                let start = (i as usize) * chunk_size;
-                let end = cmp::min(start + chunk_size, Kpath.nk());
-                if start >= end {
-                    break;
-                }
+                let chunk_size = if (i as usize) < remainder {
+                    chunk_size0 + 1
+                } else {
+                    chunk_size0
+                };
+                world.process_at_rank(i).send(&chunk_size);
+                end = start + chunk_size;
                 let chunk: Array2<f64> = kvec.slice(s![start..end, ..]).to_owned();
                 let mut chunk: Vec<f64> = chunk.into_iter().collect();
                 world.process_at_rank(i).send(&chunk);
+                start = end;
             }
+            //分发结束
             let chunk = kvec.slice(s![0..chunk_size, ..]).to_owned();
-            let band = model.solve_band_all(&chunk);
-            let mut data: Vec<f64> = band.into_iter().collect();
-            let mut get_data = vec![0.0; chunk_size * model.nsta() * (size as usize)];
-            world
-                .process_at_rank(0)
-                .gather_into_root(&data, &mut get_data);
-            let band = Array1::from_vec(get_data)
-                .into_shape((chunk_size * (size as usize), model.nsta()))
-                .unwrap();
-            let band = band.slice(s![0..nk, ..]).to_owned();
+            let mut band = model.solve_band_all(&chunk);
+            //开始接受数据
+            for i in 1..size {
+                let mut received_size: usize = 0;
+                world.process_at_rank(i).receive_into(&mut received_size);
+                let mut received_data = vec![0u8; received_size];
+                world
+                    .process_at_rank(i)
+                    .receive_into(&mut received_data[..]);
+                // 反序列化
+                let bands: Array2<f64> = deserialize(&received_data).unwrap();
+                band.append(Axis(0), bands.view());
+            }
             //开始绘图
 
             let mut fg = Figure::new();
@@ -212,17 +231,19 @@ fn main() {
             writeln!(output_file, "calculation finished");
         } else {
             let mut chunk_size = 0;
-            world.process_at_rank(0).broadcast_into(&mut chunk_size);
+            world.process_at_rank(0).receive_into(&mut chunk_size);
             let mut recv_chunk = vec![0.0; chunk_size * 3];
             world.process_at_rank(0).receive_into(&mut recv_chunk);
             let chunk = Array1::from_vec(recv_chunk)
                 .into_shape((chunk_size, 3))
                 .unwrap();
-            let band = model.solve_band_all(&chunk);
             //kvec 得到, 开始计算能带
+            let band = model.solve_band_all(&chunk);
             //接下来我们将数据传输回 rank 0
-            let mut data: Vec<f64> = band.into_iter().collect();
-            world.process_at_rank(0).gather_into(&data);
+            let mut serialized_data = serialize(&band).unwrap();
+            let mut data_size = serialized_data.len();
+            world.process_at_rank(0).send(&mut data_size);
+            world.process_at_rank(0).send(&mut serialized_data[..]);
         };
     }
 

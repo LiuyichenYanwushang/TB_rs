@@ -13,7 +13,6 @@ use mpi::traits::*;
 use ndarray::*;
 use ndarray_linalg::*;
 use num_complex::Complex;
-use std::cmp;
 ///这个程序是类似wanniertools 的代码, 但是实现了一些输运相关的代码, 效率相对更高
 ///主程序主要用来实现对控制文件的读取, 控制文件默认叫做 TB.in
 use std::fs::File;
@@ -76,6 +75,13 @@ fn main() {
         let line = line.unwrap();
         Input_reads.push(line.clone());
     }
+    //去除掉所有以 ! 和 # 为开头的语句
+    Input_reads.iter_mut()
+    .for_each(|s| {
+        if let Some(pos) = s.find(|c| c == '!' || c == '#') {
+            s.truncate(pos);  // 截断字符串，去掉符号后的部分
+        }
+    });
     //初始化各种控制语句
     let mut seed_name = TB_file::new();
     let mut control = Control::new();
@@ -102,7 +108,7 @@ fn main() {
             if parts.len() == 2 {
                 seed_name.fermi_energy = parts[1].trim().parse::<f64>().unwrap();
                 if rank == 0 {
-                    println!("seed_name: {}", parts[1].trim());
+                    println!("fermi energy: {}", parts[1].trim());
                 }
                 writeln!(
                     output_file,
@@ -113,18 +119,14 @@ fn main() {
         }
         if i.contains("band_plot") {
             let parts: Vec<&str> = i.split('=').collect();
-            if parts.len() == 2 {
-                if parts[1].contains("T") || parts[1].contains("t") {
-                    control.band_plot = true;
-                }
+            if parts.len() == 2 && (parts[1].contains("T") || parts[1].contains("t")) {
+                control.band_plot = true;
             }
         }
         if i.contains("optical_conductivity") {
             let parts: Vec<&str> = i.split('=').collect();
-            if parts.len() == 2 {
-                if parts[1].contains("T") || parts[1].contains("t") {
-                    control.optical_conductivity = true;
-                }
+            if parts.len() == 2 && (parts[1].contains("T") || parts[1].contains("t")) {
+                control.optical_conductivity = true;
             }
         }
     }
@@ -583,6 +585,7 @@ fn main() {
             pdf_name.push_str("sig_xz_A.pdf");
             fg.set_terminal("pdfcairo", &pdf_name);
             fg.show();
+            //开始计算 Kerr angle 以及 Faraday angle
         } else {
             let mut received_size: usize = 0;
             world.process_at_rank(0).broadcast_into(&mut received_size);
@@ -621,4 +624,7 @@ fn main() {
             world.process_at_rank(0).send(&mut serialized_data[..]);
         }
     }
+
+
+    //开始给出计算 anomalous Hall conductuvity, spin Hall conductivity conductivity.
 }

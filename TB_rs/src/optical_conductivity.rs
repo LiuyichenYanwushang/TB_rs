@@ -1,11 +1,12 @@
-use std::time::{Duration, Instant};
 use ndarray::*;
 use ndarray_linalg::conjugate;
 use ndarray_linalg::Eigh;
 use ndarray_linalg::UPLO;
 use num_complex::Complex;
 use serde::{Deserialize, Serialize};
+use std::f64::consts::PI;
 use std::ops::AddAssign;
+use std::time::{Duration, Instant};
 use Rustb::Model;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -162,12 +163,12 @@ impl Op_conductivity {
             }
         }
         if omega_min == None || omega_max == None || omega_num == None {
-            return false;
+            false
         } else {
             self.omega_min = omega_min.unwrap();
             self.omega_max = omega_max.unwrap();
             self.omega_num = omega_num.unwrap();
-            return true;
+            true
         }
     }
     pub fn nk(&self) -> usize {
@@ -249,60 +250,46 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
 
     //Zip::from(A.outer_iter_mut()) .apply(|mut a| a.assign(&evec_conj.dot(&a.dot(&evec))));
 
-    let A_x:Array2<Complex<f64>>=A.slice(s![0,..,..]).to_owned();
-    let A_y:Array2<Complex<f64>>=A.slice(s![1,..,..]).to_owned();
-    let A_z:Array2<Complex<f64>>=A.slice(s![2,..,..]).to_owned();
-    let A_x=A_x.dot(&evec);
-    let A_y=A_y.dot(&evec);
-    let A_z=A_z.dot(&evec);
-    let A_x=evec_conj.dot(&A_x);
-    let A_y=evec_conj.dot(&A_y);
-    let A_z=evec_conj.dot(&A_z);
-    /*
-    let A_xx = &A.slice(s![0, .., ..]) * (&A.slice(s![0, .., ..]).reversed_axes());
-    let A_yy = &A.slice(s![1, .., ..]) * (&A.slice(s![1, .., ..]).reversed_axes());
-    let A_zz = &A.slice(s![2, .., ..]) * (&A.slice(s![2, .., ..]).reversed_axes());
-    let A_xy = &A.slice(s![0, .., ..]) * (&A.slice(s![1, .., ..]).reversed_axes());
-    let A_yz = &A.slice(s![1, .., ..]) * (&A.slice(s![2, .., ..]).reversed_axes());
-    let A_xz = &A.slice(s![0, .., ..]) * (&A.slice(s![2, .., ..]).reversed_axes());
-    let mut A_xx = Array2::zeros((model.nsta(),model.nsta()));
-    let mut A_yy = Array2::zeros((model.nsta(),model.nsta()));
-    let mut A_zz = Array2::zeros((model.nsta(),model.nsta()));
-    let mut A_xy = Array2::zeros((model.nsta(),model.nsta()));
-    let mut A_yz = Array2::zeros((model.nsta(),model.nsta()));
-    let mut A_xz = Array2::zeros((model.nsta(),model.nsta()));
-    */
+    let A_x: Array2<Complex<f64>> = A.slice(s![0, .., ..]).to_owned();
+    let A_y: Array2<Complex<f64>> = A.slice(s![1, .., ..]).to_owned();
+    let A_z: Array2<Complex<f64>> = A.slice(s![2, .., ..]).to_owned();
+    let A_x = A_x.dot(&evec);
+    let A_y = A_y.dot(&evec);
+    let A_z = A_z.dot(&evec);
+    let A_x = evec_conj.dot(&A_x);
+    let A_y = evec_conj.dot(&A_y);
+    let A_z = evec_conj.dot(&A_z);
 
-    let og = og.mapv(|x| x + li * eta);
+    //let og = og.mapv(|x| x + li * eta);
     let n_og = og.len();
     let mut omega_H = Array2::zeros((6, n_og));
     let mut omega_aH = Array2::zeros((6, n_og));
+    let b = band.clone().into_shape((1, band.len())).unwrap(); // 将 band 转换为 1*nsta 的 2D 数组
+    let UU = &b - &b.t(); // 利用广播和转置计算差值
 
-    let mut UU = Array2::zeros((model.nsta(), model.nsta()));
-    for i in 0..model.nsta() {
-        for j in 0..model.nsta() {
-            UU[[i, j]] = band[[j]] - band[[i]];
-            /*
-            A_xx[[i,j]] =A_x[[i,j]]*A_x[[j,i]];
-            A_yy[[i,j]] =A_y[[i,j]]*A_y[[j,i]];
-            A_zz[[i,j]] =A_z[[i,j]]*A_z[[j,i]];
-            A_xy[[i,j]] =A_x[[i,j]]*A_y[[j,i]];
-            A_yz[[i,j]] =A_y[[i,j]]*A_z[[j,i]];
-            A_xz[[i,j]] =A_x[[i,j]]*A_z[[j,i]];
-            */
-        }
-    }
-
-
-    let A_xx=&A_x*(&A_x.t());
-    let A_yy=&A_y*(&A_y.t());
-    let A_zz=&A_z*(&A_z.t());
-    let A_xy=&A_x*(&A_y.t());
-    let A_yz=&A_y*(&A_z.t());
-    let A_xz=&A_x*(&A_z.t());
+    let A_xx = &A_x * (&A_x.t());
+    let A_yy = &A_y * (&A_y.t());
+    let A_zz = &A_z * (&A_z.t());
+    let A_xy = &A_x * (&A_y.t());
+    let A_yz = &A_y * (&A_z.t());
+    let A_xz = &A_x * (&A_z.t());
 
     if T == 0.0 {
         let nocc: usize = band.fold(0, |acc, x| if *x > 0.0 { acc } else { acc + 1 });
+        let uu_1 = UU.slice(s![0..nocc, nocc..]);
+        let A_xx1 = A_xx.slice(s![0..nocc, nocc..]);
+        let A_yy1 = A_yy.slice(s![0..nocc, nocc..]);
+        let A_zz1 = A_zz.slice(s![0..nocc, nocc..]);
+        let A_xy1 = A_xy.slice(s![0..nocc, nocc..]);
+        let A_yz1 = A_yz.slice(s![0..nocc, nocc..]);
+        let A_xz1 = A_xz.slice(s![0..nocc, nocc..]);
+        let uu_2 = UU.slice(s![nocc.., 0..nocc]);
+        let A_xx2 = A_xx.slice(s![nocc.., 0..nocc]);
+        let A_yy2 = A_yy.slice(s![nocc.., 0..nocc]);
+        let A_zz2 = A_zz.slice(s![nocc.., 0..nocc]);
+        let A_xy2 = A_xy.slice(s![nocc.., 0..nocc]);
+        let A_yz2 = A_yz.slice(s![nocc.., 0..nocc]);
+        let A_xz2 = A_xz.slice(s![nocc.., 0..nocc]);
         og.iter()
             .zip(
                 omega_H
@@ -310,42 +297,48 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
                     .zip(omega_aH.axis_iter_mut(Axis(1))),
             )
             .for_each(|(a0, (mut oH, mut oaH))| {
-                for i in 0..nocc {
-                    for j in nocc..model.nsta() {
-                        let U0 = (UU[[i, j]] * (UU[[i, j]] - a0)).finv();
-                        oH[[0]] += A_xx[[i,j]] * U0.im;
-                        oH[[1]] += A_yy[[i,j]] * U0.im;
-                        oH[[2]] += A_zz[[i,j]] * U0.im;
-                        oH[[3]] += A_xy[[i,j]] * U0.im;
-                        oH[[4]] += A_yz[[i,j]] * U0.im;
-                        oH[[5]] += A_xz[[i,j]] * U0.im;
-                        oaH[[0]] -= A_xx[[i,j]] * U0.re*li;
-                        oaH[[1]] -= A_yy[[i,j]] * U0.re*li;
-                        oaH[[2]] -= A_zz[[i,j]] * U0.re*li;
-                        oaH[[3]] -= A_xy[[i,j]] * U0.re*li;
-                        oaH[[4]] -= A_yz[[i,j]] * U0.re*li;
-                        oaH[[5]] -= A_xz[[i,j]] * U0.re*li;
+                let a = (&uu_1 - *a0) / eta;
+                let U0 = (-&a * &a / 2.0).mapv(|x| x.exp()) * PI / (2.0 * PI).sqrt() / eta;
+                let U0 = U0 / &uu_1;
+                let U1 = &uu_1.mapv(|x| (x - a0 - li * eta).finv().re / x);
+                oH[[0]] += (&A_xx1 * &U0).sum();
+                oH[[1]] += (&A_yy1 * &U0).sum();
+                oH[[2]] += (&A_zz1 * &U0).sum();
+                oH[[3]] += (&A_xy1 * &U0).sum();
+                oH[[4]] += (&A_yz1 * &U0).sum();
+                oH[[5]] += (&A_xz1 * &U0).sum();
+                oaH[[0]] -= (&A_xx1 * U1).sum() * li;
+                oaH[[1]] -= (&A_yy1 * U1).sum() * li;
+                oaH[[2]] -= (&A_zz1 * U1).sum() * li;
+                oaH[[3]] -= (&A_xy1 * U1).sum() * li;
+                oaH[[4]] -= (&A_yz1 * U1).sum() * li;
+                oaH[[5]] -= (&A_xz1 * U1).sum() * li;
 
-
-                        let U0 = (UU[[i, j]] * (UU[[j, i]] - a0)).finv();
-                        oH[[0]] += A_xx[[i,j]] * U0.im;
-                        oH[[1]] += A_yy[[i,j]] * U0.im;
-                        oH[[2]] += A_zz[[i,j]] * U0.im;
-                        oH[[3]] += A_xy[[i,j]] * U0.im;
-                        oH[[4]] += A_yz[[i,j]] * U0.im;
-                        oH[[5]] += A_xz[[i,j]] * U0.im;
-                        oaH[[0]] -= A_xx[[i,j]] * U0.re*li;
-                        oaH[[1]] -= A_yy[[i,j]] * U0.re*li;
-                        oaH[[2]] -= A_zz[[i,j]] * U0.re*li;
-                        oaH[[3]] -= A_xy[[i,j]] * U0.re*li;
-                        oaH[[4]] -= A_yz[[i,j]] * U0.re*li;
-                        oaH[[5]] -= A_xz[[i,j]] * U0.re*li;
-                    }
-                }
+                let a = (&uu_2 - *a0) / eta;
+                let U0 = (-&a * &a / 2.0).mapv(|x| x.exp()) * PI / (2.0 * PI).sqrt() / eta;
+                let U0 = -U0 / &uu_2;
+                let U1 = &uu_2.mapv(|x| (x - a0 - li * eta).finv().re / x);
+                oH[[0]] += (&A_xx2 * &U0).sum();
+                oH[[1]] += (&A_yy2 * &U0).sum();
+                oH[[2]] += (&A_zz2 * &U0).sum();
+                oH[[3]] += (&A_xy2 * &U0).sum();
+                oH[[4]] += (&A_yz2 * &U0).sum();
+                oH[[5]] += (&A_xz2 * &U0).sum();
+                oaH[[0]] -= (&A_xx2 * U1).sum() * li;
+                oaH[[1]] -= (&A_yy2 * U1).sum() * li;
+                oaH[[2]] -= (&A_zz2 * U1).sum() * li;
+                oaH[[3]] -= (&A_xy2 * U1).sum() * li;
+                oaH[[4]] -= (&A_yz2 * U1).sum() * li;
+                oaH[[5]] -= (&A_xz2 * U1).sum() * li;
             });
     } else {
         let beta = 1.0 / T / 8.617e-5;
         let fermi_dirac = band.mapv(|x| ((beta * (x - mu)).exp() + 1.0).recip());
+        let b = fermi_dirac
+            .clone()
+            .into_shape((1, fermi_dirac.len()))
+            .unwrap(); // 将 band 转换为 1*nsta 的 2D 数组
+        let fermi = &b - &b.t(); // 利用广播和转置计算差值
         og.iter()
             .zip(
                 omega_H
@@ -353,24 +346,51 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
                     .zip(omega_aH.axis_iter_mut(Axis(1))),
             )
             .for_each(|(a0, (mut oH, mut oaH))| {
-                for i in 0..model.nsta() {
-                    for j in 0..model.nsta() {
-                        let U0 = (fermi_dirac[i] - fermi_dirac[j])
-                            * (UU[[i, j]] * (UU[[i, j]] - a0)).finv();
-                        oH[[0]] += A_xx[[i,j]] * U0.im;
-                        oH[[1]] += A_yy[[i,j]] * U0.im;
-                        oH[[2]] += A_zz[[i,j]] * U0.im;
-                        oH[[3]] += A_xy[[i,j]] * U0.im;
-                        oH[[4]] += A_yz[[i,j]] * U0.im;
-                        oH[[5]] += A_xz[[i,j]] * U0.im;
-                        oaH[[0]] -= A_xx[[i,j]] * U0.re*li;
-                        oaH[[1]] -= A_yy[[i,j]] * U0.re*li;
-                        oaH[[2]] -= A_zz[[i,j]] * U0.re*li;
-                        oaH[[3]] -= A_xy[[i,j]] * U0.re*li;
-                        oaH[[4]] -= A_yz[[i,j]] * U0.re*li;
-                        oaH[[5]] -= A_xz[[i,j]] * U0.re*li;
+                let a = (&UU - *a0) / eta;
+                let U0 = (-&a * &a / 2.0).mapv(|x| x.exp()) * PI / (2.0 * PI).sqrt() / eta;
+                let U0 = U0 / &UU;
+                let U1 = &fermi
+                    * &UU.mapv(|x| {
+                        if x.abs() > 1e-6 {
+                            (x - a0 - li * eta).finv().re
+                        } else {
+                            0.0
+                        }
+                    });
+                oH[[0]] += (&A_xx * &U0).sum();
+                oH[[1]] += (&A_yy * &U0).sum();
+                oH[[2]] += (&A_zz * &U0).sum();
+                oH[[3]] += (&A_xy * &U0).sum();
+                oH[[4]] += (&A_yz * &U0).sum();
+                oH[[5]] += (&A_xz * &U0).sum();
+                oaH[[0]] -= (&A_xx * &U1).sum() * li;
+                oaH[[1]] -= (&A_yy * &U1).sum() * li;
+                oaH[[2]] -= (&A_zz * &U1).sum() * li;
+                oaH[[3]] -= (&A_xy * &U1).sum() * li;
+                oaH[[4]] -= (&A_yz * &U1).sum() * li;
+                oaH[[5]] -= (&A_xz * &U1).sum() * li;
+
+                /*
+                for i in 0..band.len() {
+                    for j in 0..band.len() {
+                        let a = (UU[[i, j]] - a0) / eta;
+                        let U0 = PI * (-a * a / 2.0).exp() / (2.0 * PI).sqrt() / eta / UU[[i, j]];
+                        let U1 = (UU[[i, j]] * (UU[[i, j]] - a0 - li * eta)).finv().re;
+                        oH[[0]] += A_xx[[i, j]] * U0;
+                        oH[[1]] += A_yy[[i, j]] * U0;
+                        oH[[2]] += A_zz[[i, j]] * U0;
+                        oH[[3]] += A_xy[[i, j]] * U0;
+                        oH[[4]] += A_yz[[i, j]] * U0;
+                        oH[[5]] += A_xz[[i, j]] * U0;
+                        oaH[[0]] -= A_xx[[i, j]] * U1 * li;
+                        oaH[[1]] -= A_yy[[i, j]] * U1 * li;
+                        oaH[[2]] -= A_zz[[i, j]] * U1 * li;
+                        oaH[[3]] -= A_xy[[i, j]] * U1 * li;
+                        oaH[[4]] -= A_yz[[i, j]] * U1 * li;
+                        oaH[[5]] -= A_xz[[i, j]] * U1 * li;
                     }
                 }
+                */
             });
     }
     (omega_H, omega_aH)
@@ -389,16 +409,22 @@ pub fn Optical_conductivity(
     let (og_min, og_max, n_og) = optical_parameter.omega();
     let mut matric = Array2::zeros((6, n_og));
     let mut omega = Array2::zeros((3, n_og));
-    //let mut a=Instant::now();
-    for (i,k) in kvec.outer_iter().enumerate() {
+    //let mut a = Instant::now();
+    for (i, k) in kvec.outer_iter().enumerate() {
         let (omega_H, omega_aH) = optical_geometry_onek(&model, &k, T, mu, &og, eta);
 
-        let sig_xx: Array1<Complex<f64>> = &omega_H.row(0).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(0).mapv(|x| x.im * li);
-        let sig_yy: Array1<Complex<f64>> = &omega_H.row(1).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(1).mapv(|x| x.im * li);
-        let sig_zz: Array1<Complex<f64>> = &omega_H.row(2).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(2).mapv(|x| x.im * li);
-        let sig_xy: Array1<Complex<f64>> = &omega_H.row(3).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(3).mapv(|x| x.im * li);
-        let sig_yz: Array1<Complex<f64>> = &omega_H.row(4).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(4).mapv(|x| x.im * li);
-        let sig_xz: Array1<Complex<f64>> = &omega_H.row(5).mapv(|x| Complex::new(x.re, 0.0)) + &omega_aH.row(5).mapv(|x| x.im * li);
+        let sig_xx: Array1<Complex<f64>> = &omega_H.row(0).mapv(|x| Complex::new(x.re, 0.0))
+            + &omega_aH.row(0).mapv(|x| x.im * li);
+        let sig_yy: Array1<Complex<f64>> = &omega_H.row(1).mapv(|x| Complex::new(x.re, 0.0))
+            + &omega_aH.row(1).mapv(|x| x.im * li);
+        let sig_zz: Array1<Complex<f64>> = &omega_H.row(2).mapv(|x| Complex::new(x.re, 0.0))
+            + &omega_aH.row(2).mapv(|x| x.im * li);
+        let sig_xy: Array1<Complex<f64>> = &omega_H.row(3).mapv(|x| Complex::new(x.re, 0.0))
+            + &omega_aH.row(3).mapv(|x| x.im * li);
+        let sig_yz: Array1<Complex<f64>> = &omega_H.row(4).mapv(|x| Complex::new(x.re, 0.0))
+            + &omega_aH.row(4).mapv(|x| x.im * li);
+        let sig_xz: Array1<Complex<f64>> = &omega_H.row(5).mapv(|x| Complex::new(x.re, 0.0))
+            + &omega_aH.row(5).mapv(|x| x.im * li);
         matric.row_mut(0).add_assign(&sig_xx);
         matric.row_mut(1).add_assign(&sig_yy);
         matric.row_mut(2).add_assign(&sig_zz);
@@ -406,14 +432,18 @@ pub fn Optical_conductivity(
         matric.row_mut(4).add_assign(&sig_yz);
         matric.row_mut(5).add_assign(&sig_xz);
 
-        let sig_xy: Array1<Complex<f64>> = &omega_aH.row(3).mapv(|x| x.re + 0.0 * li) + &omega_H.row(3).mapv(|x| x.im * li);
-        let sig_yz: Array1<Complex<f64>> = &omega_aH.row(4).mapv(|x| x.re + 0.0 * li) + &omega_H.row(4).mapv(|x| x.im * li);
-        let sig_xz: Array1<Complex<f64>> = &omega_aH.row(5).mapv(|x| x.re + 0.0 * li) + &omega_H.row(5).mapv(|x| x.im * li);
+        let sig_xy: Array1<Complex<f64>> =
+            &omega_aH.row(3).mapv(|x| x.re + 0.0 * li) + &omega_H.row(3).mapv(|x| x.im * li);
+        let sig_yz: Array1<Complex<f64>> =
+            &omega_aH.row(4).mapv(|x| x.re + 0.0 * li) + &omega_H.row(4).mapv(|x| x.im * li);
+        let sig_xz: Array1<Complex<f64>> =
+            &omega_aH.row(5).mapv(|x| x.re + 0.0 * li) + &omega_H.row(5).mapv(|x| x.im * li);
         omega.row_mut(0).add_assign(&sig_xy);
         omega.row_mut(1).add_assign(&sig_yz);
         omega.row_mut(2).add_assign(&sig_xz);
-
-
+        //let mut b = Instant::now();
+        //let average_time = b.duration_since(a).as_secs_f64() / (i as f64 + 1.0);
+        //println!("average_time={}", average_time);
     }
     (matric, omega)
 }

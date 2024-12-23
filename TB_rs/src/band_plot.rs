@@ -62,9 +62,9 @@ impl k_path {
             }
         }
         if in_section {
-            return Some(Kpath);
+            Some(Kpath)
         } else {
-            return None;
+            None
         }
     }
     pub fn get_path_vec(

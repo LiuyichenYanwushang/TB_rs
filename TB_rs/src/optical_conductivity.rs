@@ -1,3 +1,24 @@
+//! This module implements the calculation of optical conductivity for a given material model.
+//!
+//! The core structure `OC_parameter` manages parameters for Brillouin zone sampling (`k_mesh`),
+//! energy broadening (`eta`), frequency range (`omega_min`, `omega_max`, `omega_num`),
+//! temperature (`T`), and chemical potential (`mu`). These parameters are typically read from
+//! an input configuration file via helper methods (e.g., `get_k_mesh`, `get_eta`).
+//!
+//! The `Optical_conductivity` function computes the optical conductivity tensor components
+//! (e.g., σ_xx, σ_xy) across a specified frequency range. It iterates over k-points in the
+//! Brillouin zone, calculates contributions from each k-point using linear algebra operations
+//! (via `ndarray` and `ndarray_linalg`), and aggregates results into conductivity matrices.
+//!
+//! Key features:
+//! - Supports Gaussian broadening for energy levels.
+//! - Handles complex frequency-dependent responses using `num_complex`.
+//! - Serialization/deserialization of parameters via `serde`.
+//!
+//! Typical usage involves configuring `OC_parameter`, passing it to `Optical_conductivity`
+//! along with a material `Model` and k-point grid, to obtain the optical conductivity tensor
+//! as a function of incident light frequency.
+
 use ndarray::*;
 use ndarray_linalg::conjugate;
 use ndarray_linalg::Eigh;
@@ -10,7 +31,7 @@ use std::time::{Duration, Instant};
 use Rustb::Model;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-pub struct Op_conductivity {
+pub struct OC_parameter {
     ///Brillouin zone k point number
     ///Use "k_mesh" to specify
     k_mesh: [usize; 3],
@@ -30,9 +51,9 @@ pub struct Op_conductivity {
     mu: f64,
 }
 
-impl Op_conductivity {
+impl OC_parameter {
     pub fn new() -> Self {
-        Op_conductivity {
+        OC_parameter {
             k_mesh: [1, 1, 1],
             eta: 1e-3,
             omega_min: 0.0,
@@ -42,7 +63,7 @@ impl Op_conductivity {
             mu: 0.0,
         }
     }
-    ///得到 k_mesh, 返回 true or false 表示是否指定了 k_mesh
+    ///从输入文件中得到 k_mesh, 返回 true or false 表示是否指定了 k_mesh
     pub fn get_k_mesh(&mut self, reads: &Vec<String>) -> bool {
         let mut kmesh = None;
         for line in reads.iter() {
@@ -109,7 +130,7 @@ impl Op_conductivity {
 
     ///从控制文件中读取化学势
     pub fn get_mu(&mut self, reads: &Vec<String>) -> bool {
-        let mut eta = None;
+        let mut mu = None;
         for line in reads.iter() {
             //后面会用到 chemical_potential_min, chemical_potential_max,chemical_potential_num
             if line.contains("chemical_potential")
@@ -118,20 +139,20 @@ impl Op_conductivity {
                 let parts: Vec<&str> = line.split('=').collect();
                 if parts.len() == 2 {
                     let mut string = parts[1].trim().split_whitespace();
-                    let eta0 = string.next().unwrap().parse::<f64>().unwrap();
-                    eta = Some(eta0);
+                    let mu0 = string.next().unwrap().parse::<f64>().unwrap();
+                    mu = Some(mu0);
                 }
             }
         }
-        if let Some(eta) = eta {
-            self.eta = eta;
+        if let Some(mu) = mu {
+            self.mu = mu;
             true
         } else {
             false
         }
     }
 
-    ///从控制文件中读取
+    ///从控制文件中读取频率
     pub fn get_omega(&mut self, reads: &Vec<String>) -> bool {
         let mut omega_min = None;
         let mut omega_max = None;
@@ -248,8 +269,6 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
     let evec_conj = evec.t();
     let evec = evec.mapv(|x| x.conj());
 
-    //Zip::from(A.outer_iter_mut()) .apply(|mut a| a.assign(&evec_conj.dot(&a.dot(&evec))));
-
     let A_x: Array2<Complex<f64>> = A.slice(s![0, .., ..]).to_owned();
     let A_y: Array2<Complex<f64>> = A.slice(s![1, .., ..]).to_owned();
     let A_z: Array2<Complex<f64>> = A.slice(s![2, .., ..]).to_owned();
@@ -275,7 +294,7 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
     let A_xz = &A_x * (&A_z.t());
 
     if T == 0.0 {
-        let nocc: usize = band.fold(0, |acc, x| if *x > 0.0 { acc } else { acc + 1 });
+        let nocc: usize = band.fold(0, |acc, x| if *x > mu { acc } else { acc + 1 });
         let uu_1 = UU.slice(s![0..nocc, nocc..]);
         let A_xx1 = A_xx.slice(s![0..nocc, nocc..]);
         let A_yy1 = A_yy.slice(s![0..nocc, nocc..]);
@@ -300,7 +319,7 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
                 let a = (&uu_1 - *a0) / eta;
                 let U0 = (-&a * &a / 2.0).mapv(|x| x.exp()) * PI / (2.0 * PI).sqrt() / eta;
                 let U0 = U0 / &uu_1;
-                let U1 = &uu_1.mapv(|x| (x - a0 - li * eta).finv().re / x);
+                let U1 = &uu_1.mapv(|x| (x * (x - a0 - li * eta)).finv().re);
                 oH[[0]] += (&A_xx1 * &U0).sum();
                 oH[[1]] += (&A_yy1 * &U0).sum();
                 oH[[2]] += (&A_zz1 * &U0).sum();
@@ -317,7 +336,7 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
                 let a = (&uu_2 - *a0) / eta;
                 let U0 = (-&a * &a / 2.0).mapv(|x| x.exp()) * PI / (2.0 * PI).sqrt() / eta;
                 let U0 = -U0 / &uu_2;
-                let U1 = &uu_2.mapv(|x| (x - a0 - li * eta).finv().re / x);
+                let U1 = &uu_2.mapv(|x| -(x * (x - a0 - li * eta)).finv().re);
                 oH[[0]] += (&A_xx2 * &U0).sum();
                 oH[[1]] += (&A_yy2 * &U0).sum();
                 oH[[2]] += (&A_zz2 * &U0).sum();
@@ -348,11 +367,11 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
             .for_each(|(a0, (mut oH, mut oaH))| {
                 let a = (&UU - *a0) / eta;
                 let U0 = (-&a * &a / 2.0).mapv(|x| x.exp()) * PI / (2.0 * PI).sqrt() / eta;
-                let U0 = U0 / &UU;
+                let U0 = U0 / &UU * &fermi;
                 let U1 = &fermi
                     * &UU.mapv(|x| {
                         if x.abs() > 1e-6 {
-                            (x - a0 - li * eta).finv().re
+                            (x - a0 - li * eta).finv().re / x
                         } else {
                             0.0
                         }
@@ -369,28 +388,6 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
                 oaH[[3]] -= (&A_xy * &U1).sum() * li;
                 oaH[[4]] -= (&A_yz * &U1).sum() * li;
                 oaH[[5]] -= (&A_xz * &U1).sum() * li;
-
-                /*
-                for i in 0..band.len() {
-                    for j in 0..band.len() {
-                        let a = (UU[[i, j]] - a0) / eta;
-                        let U0 = PI * (-a * a / 2.0).exp() / (2.0 * PI).sqrt() / eta / UU[[i, j]];
-                        let U1 = (UU[[i, j]] * (UU[[i, j]] - a0 - li * eta)).finv().re;
-                        oH[[0]] += A_xx[[i, j]] * U0;
-                        oH[[1]] += A_yy[[i, j]] * U0;
-                        oH[[2]] += A_zz[[i, j]] * U0;
-                        oH[[3]] += A_xy[[i, j]] * U0;
-                        oH[[4]] += A_yz[[i, j]] * U0;
-                        oH[[5]] += A_xz[[i, j]] * U0;
-                        oaH[[0]] -= A_xx[[i, j]] * U1 * li;
-                        oaH[[1]] -= A_yy[[i, j]] * U1 * li;
-                        oaH[[2]] -= A_zz[[i, j]] * U1 * li;
-                        oaH[[3]] -= A_xy[[i, j]] * U1 * li;
-                        oaH[[4]] -= A_yz[[i, j]] * U1 * li;
-                        oaH[[5]] -= A_xz[[i, j]] * U1 * li;
-                    }
-                }
-                */
             });
     }
     (omega_H, omega_aH)
@@ -399,7 +396,7 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
 pub fn Optical_conductivity(
     model: &Model,
     kvec: &Array2<f64>,
-    optical_parameter: Op_conductivity,
+    optical_parameter: OC_parameter,
 ) -> (Array2<Complex<f64>>, Array2<Complex<f64>>) {
     let li: Complex<f64> = 1.0 * Complex::i();
     let eta = optical_parameter.eta();

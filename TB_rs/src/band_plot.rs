@@ -1,3 +1,20 @@
+//! K-path Generator Module
+//! ===========================
+//!
+//! This module handles k-point path parsing and generation for band structure calculations.
+//! Key functionality:
+//! 1. Reads k-path definitions from input files ("kpoint_path" section)
+//! 2. Constructs interpolated k-point sequences between high-symmetry points
+//! 3. Calculates crystal momentum metrics using lattice basis
+//! 4. Generates:
+//!    - k-point vectors in reciprocal space
+//!    - Distance metrics for band plotting
+//!    - High-symmetry point labels for visualization
+//!
+//! Typical workflow:
+//!   Parse input => Build KPath => Generate k-vec/distance via get_path_vec()
+//!
+
 use ndarray::*;
 use ndarray_linalg::*;
 use std::cmp;

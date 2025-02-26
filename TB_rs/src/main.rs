@@ -1,7 +1,29 @@
+//! This module implements a parallel computational framework for calculating transport properties of materials using tight-binding models.
+//!
+//! Core Functionalities:
+//! - Band structure generation along user-defined k-paths
+//! - Optical conductivity calculations via Kubo formula (intra-band and inter-band contributions)
+//! - Anomalous Hall conductivity and Kerr angle computations
+//! - MPI-based distributed computing with load balancing
+//! - Automated generation of publication-quality PDF figures
+//!
+//! Input/Output:
+//! - Reads parameters from `TB.in` configuration file
+//! - Writes results to `TB.out` with detailed computation logs
+//! - Generates band structure (.pdf) and conductivity tensor data files
+//!
+//! Technical Highlights:
+//! - MPI parallelization for k-space sampling
+//! - Bincode serialization for efficient IPC
+//! - Built-in crystal symmetry analysis
+//! - Smart input parsing with comment filtering
+
+pub mod anomalous_Hall_conductivity;
 pub mod band_plot;
 pub mod optical_conductivity;
+use crate::anomalous_Hall_conductivity::*;
 use crate::band_plot::k_path;
-use crate::optical_conductivity::Op_conductivity;
+use crate::optical_conductivity::OC_parameter;
 use crate::optical_conductivity::Optical_conductivity;
 use bincode::{deserialize, serialize};
 use gnuplot::AutoOption::*;
@@ -13,8 +35,6 @@ use mpi::traits::*;
 use ndarray::*;
 use ndarray_linalg::*;
 use num_complex::Complex;
-///这个程序是类似wanniertools 的代码, 但是实现了一些输运相关的代码, 效率相对更高
-///主程序主要用来实现对控制文件的读取, 控制文件默认叫做 TB.in
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -27,17 +47,19 @@ use Rustb::*;
 struct Control {
     band_plot: bool,
     optical_conductivity: bool,
-    kerr_angle: bool,
+    anomalous_Hall_conductivity: bool,
 }
+
 impl Control {
     pub fn new() -> Self {
         Control {
             band_plot: false,
             optical_conductivity: false,
-            kerr_angle: false,
+            anomalous_Hall_conductivity: false,
         }
     }
 }
+
 struct TB_file {
     seed_name: Option<String>,
     fermi_energy: f64,
@@ -75,11 +97,26 @@ fn main() {
         let line = line.unwrap();
         Input_reads.push(line.clone());
     }
-    //去除掉所有以 ! 和 # 为开头的语句
-    Input_reads.iter_mut()
-    .for_each(|s| {
-        if let Some(pos) = s.find(|c| c == '!' || c == '#') {
-            s.truncate(pos);  // 截断字符串，去掉符号后的部分
+    /*
+    //去除掉所有以 ! 和 # 以及 // 为开头的语句
+    Input_reads.iter_mut().for_each(|s| {
+        if let Some(pos) = s.find(|c| c == '!' || c == '#' || c == "//") {
+            s.truncate(pos); // 截断字符串，去掉符号后的部分
+        }
+    });
+    */
+    Input_reads.iter_mut().for_each(|s| {
+        // 原来的处理：找到并截断到'!'、'#'、或 "//"的位置
+        if let Some(pos) = [s.find('!'), s.find('#'), s.find("//")]
+            .iter()
+            .filter_map(|&x| x)
+            .min()
+        {
+            s.truncate(pos);
+        }
+        // 现在处理分号结尾的情况
+        if s.ends_with(';') {
+            s.truncate(s.len() - 1);
         }
     });
     //初始化各种控制语句
@@ -127,6 +164,12 @@ fn main() {
             let parts: Vec<&str> = i.split('=').collect();
             if parts.len() == 2 && (parts[1].contains("T") || parts[1].contains("t")) {
                 control.optical_conductivity = true;
+            }
+        }
+        if i.contains("anomalous_Hall_conductivity") {
+            let parts: Vec<&str> = i.split('=').collect();
+            if parts.len() == 2 && (parts[1].contains("T") || parts[1].contains("t")) {
+                control.anomalous_Hall_conductivity = true;
             }
         }
     }
@@ -254,7 +297,7 @@ fn main() {
         if rank == 0 {
             writeln!(output_file, "start calculatiing the optical conductivity");
             println!("start calculatiing the optical conductivity");
-            let mut optical_parameter = Op_conductivity::new();
+            let mut optical_parameter = OC_parameter::new();
             let have_kmesh = optical_parameter.get_k_mesh(&Input_reads);
             if !have_kmesh {
                 writeln!(
@@ -330,7 +373,7 @@ fn main() {
             }
             //分发结束
             let chunk = kvec.slice(s![0..chunk_size, ..]).to_owned();
-            let (mut matric, mut omega): (Array2<Complex<f64>>, Array2<Complex<f64>>) =
+            let (mut metric, mut omega): (Array2<Complex<f64>>, Array2<Complex<f64>>) =
                 Optical_conductivity(&model, &chunk, optical_parameter);
 
             for i in 1..size {
@@ -341,8 +384,8 @@ fn main() {
                     .process_at_rank(i)
                     .receive_into(&mut received_data[..]);
                 // 反序列化
-                let matric0: Array2<Complex<f64>> = deserialize(&received_data).unwrap();
-                matric = matric + matric0;
+                let metric0: Array2<Complex<f64>> = deserialize(&received_data).unwrap();
+                metric = metric + metric0;
 
                 let mut received_size: usize = 0;
                 world.process_at_rank(i).receive_into(&mut received_size);
@@ -356,7 +399,7 @@ fn main() {
             }
             let og = optical_parameter.og();
             omega = omega / (nk as f64) / model.lat.det().unwrap() * Quantum_conductivity * 1.0e8;
-            matric = matric / (nk as f64) / model.lat.det().unwrap() * Quantum_conductivity * 1.0e8;
+            metric = metric / (nk as f64) / model.lat.det().unwrap() * Quantum_conductivity * 1.0e8;
             println!("The optical conductivity calculation is finished");
             writeln!(output_file, "calculation finished");
             //开始写入
@@ -364,15 +407,15 @@ fn main() {
                 output_file,
                 "write data in optical_conductivity_A.dat and optical_conductivity_S.dat"
             );
-            let mut matric_file =
+            let mut metric_file =
                 File::create("optical_conductivity_S.dat").expect("Unable to create TB.in");
             let mut input_string = String::new();
             input_string.push_str("#Calculation results are reported in units of Ω^-1 cm^-1\n");
             input_string.push_str("#For symmetrical results, the arranged data are: omega, Re(xx, Im(xx), Re(yy), Im(yy), Re(zz), Im(zz), Re(xy), Im(xy), Re(yz), Im(yz), Re(xz), Im(xz)\n");
-            for i in 0..matric.len_of(Axis(1)) {
-                input_string.push_str(&format!("{:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}\n",og[[i]],matric[[0,i]].re,matric[[0,i]].im,matric[[1,i]].re,matric[[1,i]].im,matric[[2,i]].re,matric[[2,i]].im,matric[[3,i]].re,matric[[3,i]].im,matric[[4,i]].re,matric[[4,i]].im,matric[[5,i]].re,matric[[5,i]].im));
+            for i in 0..metric.len_of(Axis(1)) {
+                input_string.push_str(&format!("{:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}    {:11.8}\n",og[[i]],metric[[0,i]].re,metric[[0,i]].im,metric[[1,i]].re,metric[[1,i]].im,metric[[2,i]].re,metric[[2,i]].im,metric[[3,i]].re,metric[[3,i]].im,metric[[4,i]].re,metric[[4,i]].im,metric[[5,i]].re,metric[[5,i]].im));
             }
-            writeln!(matric_file, "{}", &input_string);
+            writeln!(metric_file, "{}", &input_string);
 
             let mut berry_file =
                 File::create("optical_conductivity_A.dat").expect("Unable to create TB.in");
@@ -394,197 +437,53 @@ fn main() {
             }
             writeln!(berry_file, "{}", &input_string);
             writeln!(output_file, "writing end, now plotting");
-            //开始绘图
 
+            //---------------------开始绘图------------------------
             let (og_min, og_max, n_og) = optical_parameter.omega();
-            let mut fg = Figure::new();
-            let x: Vec<f64> = og.to_vec();
-            let axes = fg.axes2d();
-            let y: Vec<f64> = matric.row(0).to_owned().map(|x| x.re).to_vec();
-            axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
-            let y: Vec<f64> = matric.row(0).to_owned().map(|x| x.im).to_vec();
-            axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
-            let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_label(
-                "{/Symbol s}_{xx}^S (Ω^{-1} cm^{-1})",
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
-            let mut pdf_name = String::new();
-            pdf_name.push_str("sig_xx_S.pdf");
-            fg.set_terminal("pdfcairo", &pdf_name);
-            fg.show();
+            for (row_idx, component) in ["xx", "yy", "zz", "xy", "yz", "xz"].iter().enumerate() {
+                let mut fg = Figure::new();
+                let x: Vec<f64> = og.to_vec();
+                let axes = fg.axes2d();
+                let y: Vec<f64> = metric.row(row_idx).to_owned().map(|x| x.re).to_vec();
+                axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
+                let y: Vec<f64> = metric.row(row_idx).to_owned().map(|x| x.im).to_vec();
+                axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
+                let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
+                axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+                axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+                axes.set_y_label(
+                    &format!("{{/Symbol s}}_{{{0}}}^S (Ω^{{-1}} cm^{{-1}})", component),
+                    &[Font("Times New Roman", 18.0)],
+                );
+                axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
-            let mut fg = Figure::new();
-            let x: Vec<f64> = og.to_vec();
-            let axes = fg.axes2d();
-            let y: Vec<f64> = matric.row(1).to_owned().map(|x| x.re).to_vec();
-            axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
-            let y: Vec<f64> = matric.row(1).to_owned().map(|x| x.im).to_vec();
-            axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
-            let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_label(
-                "{/Symbol s}_{yy}^S (Ω^{-1} cm^{-1})",
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
+                let mut pdf_name = format!("sig_{}_S.pdf", component);
+                fg.set_terminal("pdfcairo", &pdf_name);
+                fg.show();
+            }
 
-            let mut pdf_name = String::new();
-            pdf_name.push_str("sig_yy_S.pdf");
-            fg.set_terminal("pdfcairo", &pdf_name);
-            fg.show();
+            for (row_idx, component) in ["xy", "yz", "xz"].iter().enumerate() {
+                let mut fg = Figure::new();
+                let x: Vec<f64> = og.to_vec();
+                let axes = fg.axes2d();
+                let y: Vec<f64> = omega.row(row_idx).to_owned().map(|x| x.re).to_vec();
+                axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
+                let y: Vec<f64> = omega.row(row_idx).to_owned().map(|x| x.im).to_vec();
+                axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
+                let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
+                axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+                axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+                axes.set_y_label(
+                    &format!("{{/Symbol s}}_{{{0}}}^A (Ω^{{-1}} cm^{{-1}})", component),
+                    &[Font("Times New Roman", 18.0)],
+                );
+                axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
 
-            let mut fg = Figure::new();
-            let x: Vec<f64> = og.to_vec();
-            let axes = fg.axes2d();
-            let y: Vec<f64> = matric.row(2).to_owned().map(|x| x.re).to_vec();
-            axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
-            let y: Vec<f64> = matric.row(2).to_owned().map(|x| x.im).to_vec();
-            axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
-            let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_label(
-                "{/Symbol s}_{zz}^S (Ω^{-1} cm^{-1})",
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
-
-            let mut pdf_name = String::new();
-            pdf_name.push_str("sig_zz_S.pdf");
-            fg.set_terminal("pdfcairo", &pdf_name);
-            fg.show();
-
-            let mut fg = Figure::new();
-            let x: Vec<f64> = og.to_vec();
-            let axes = fg.axes2d();
-            let y: Vec<f64> = matric.row(3).to_owned().map(|x| x.re).to_vec();
-            axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
-            let y: Vec<f64> = matric.row(3).to_owned().map(|x| x.im).to_vec();
-            axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
-            let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_label(
-                "{/Symbol s}_{xy}^S (Ω^{-1} cm^{-1})",
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
-
-            let mut pdf_name = String::new();
-            pdf_name.push_str("sig_xy_S.pdf");
-            fg.set_terminal("pdfcairo", &pdf_name);
-            fg.show();
-
-            let mut fg = Figure::new();
-            let x: Vec<f64> = og.to_vec();
-            let axes = fg.axes2d();
-            let y: Vec<f64> = matric.row(4).to_owned().map(|x| x.re).to_vec();
-            axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
-            let y: Vec<f64> = matric.row(4).to_owned().map(|x| x.im).to_vec();
-            axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
-            let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_label(
-                "{/Symbol s}_{yz}^S (Ω^{-1} cm^{-1})",
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
-
-            let mut pdf_name = String::new();
-            pdf_name.push_str("sig_yz_S.pdf");
-            fg.set_terminal("pdfcairo", &pdf_name);
-            fg.show();
-
-            let mut fg = Figure::new();
-            let x: Vec<f64> = og.to_vec();
-            let axes = fg.axes2d();
-            let y: Vec<f64> = matric.row(5).to_owned().map(|x| x.re).to_vec();
-            axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
-            let y: Vec<f64> = matric.row(5).to_owned().map(|x| x.im).to_vec();
-            axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
-            let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_label(
-                "{/Symbol s}_{xz}^S (Ω^{-1} cm^{-1})",
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
-
-            let mut pdf_name = String::new();
-            pdf_name.push_str("sig_xz_S.pdf");
-            fg.set_terminal("pdfcairo", &pdf_name);
-            fg.show();
-
-            let mut fg = Figure::new();
-            let x: Vec<f64> = og.to_vec();
-            let axes = fg.axes2d();
-            let y: Vec<f64> = omega.row(0).to_owned().map(|x| x.re).to_vec();
-            axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
-            let y: Vec<f64> = omega.row(0).to_owned().map(|x| x.im).to_vec();
-            axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
-            let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_label(
-                "{/Symbol s}_{xy}^A (Ω^{-1} cm^{-1})",
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
-
-            let mut pdf_name = String::new();
-            pdf_name.push_str("sig_xy_A.pdf");
-            fg.set_terminal("pdfcairo", &pdf_name);
-            fg.show();
-
-            let mut fg = Figure::new();
-            let x: Vec<f64> = og.to_vec();
-            let axes = fg.axes2d();
-            let y: Vec<f64> = omega.row(1).to_owned().map(|x| x.re).to_vec();
-            axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
-            let y: Vec<f64> = omega.row(1).to_owned().map(|x| x.im).to_vec();
-            axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
-            let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_label(
-                "{/Symbol s}_{yz}^A (Ω^{-1} cm^{-1})",
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
-
-            let mut pdf_name = String::new();
-            pdf_name.push_str("sig_yz_A.pdf");
-            fg.set_terminal("pdfcairo", &pdf_name);
-            fg.show();
-
-            let mut fg = Figure::new();
-            let x: Vec<f64> = og.to_vec();
-            let axes = fg.axes2d();
-            let y: Vec<f64> = omega.row(2).to_owned().map(|x| x.re).to_vec();
-            axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
-            let y: Vec<f64> = omega.row(2).to_owned().map(|x| x.im).to_vec();
-            axes.lines(&x, &y, &[Color("red"), LineStyle(Solid)]);
-            let axes = axes.set_x_range(Fix(og_min), Fix(og_max));
-            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-            axes.set_y_label(
-                "{/Symbol s}_{xz}^A (Ω^{-1} cm^{-1})",
-                &[Font("Times New Roman", 18.0)],
-            );
-            axes.set_x_label("ℏω (eV)", &[Font("Times New Roman", 18.0)]);
-
-            let mut pdf_name = String::new();
-            pdf_name.push_str("sig_xz_A.pdf");
-            fg.set_terminal("pdfcairo", &pdf_name);
-            fg.show();
+                let mut pdf_name = format!("sig_{}_A.pdf", component);
+                fg.set_terminal("pdfcairo", &pdf_name);
+                fg.show();
+            }
             //开始计算 Kerr angle 以及 Faraday angle
         } else {
             let mut received_size: usize = 0;
@@ -596,7 +495,7 @@ fn main() {
                 .process_at_rank(0)
                 .broadcast_into(&mut received_data[..]);
             // 反序列化
-            let optical_parameter: Op_conductivity = deserialize(&received_data).unwrap();
+            let optical_parameter: OC_parameter = deserialize(&received_data).unwrap();
             //接受 optical_paramter 结束, 开始接受kvec
             let mut nk: usize = 0;
             world.process_at_rank(0).broadcast_into(&mut nk);
@@ -607,12 +506,12 @@ fn main() {
             let chunk = Array1::from_vec(recv_chunk)
                 .into_shape((chunk_size, 3))
                 .unwrap();
-            //接受kvec 开始计算 quantum matric
-            let (matric, omega): (Array2<Complex<f64>>, Array2<Complex<f64>>) =
+            //接受kvec 开始计算 quantum metric
+            let (metric, omega): (Array2<Complex<f64>>, Array2<Complex<f64>>) =
                 Optical_conductivity(&model, &chunk, optical_parameter);
 
-            //先将 matric 序列化并传输回rank0
-            let mut serialized_data = serialize(&matric).unwrap();
+            //先将 metric 序列化并传输回rank0
+            let mut serialized_data = serialize(&metric).unwrap();
             let mut data_size = serialized_data.len();
             world.process_at_rank(0).send(&mut data_size);
             world.process_at_rank(0).send(&mut serialized_data[..]);
@@ -625,6 +524,173 @@ fn main() {
         }
     }
 
-
     //开始给出计算 anomalous Hall conductuvity, spin Hall conductivity conductivity.
+
+    if control.anomalous_Hall_conductivity {
+        //开始计算反常Hall 电导
+        if rank == 0 {
+            writeln!(
+                output_file,
+                "start calculatiing the anomalous Hall conductivity"
+            );
+            println!("start calculatiing the anomalous Hall");
+            let mut ahc_parameter = AHC_parameter::new();
+            let have_kmesh = ahc_parameter.get_k_mesh(&Input_reads);
+            if !have_kmesh {
+                writeln!(
+                    output_file,
+                    "Error: You mut set k_mesh for calculating anomalous Hall conductivity"
+                );
+            }
+            let have_T = ahc_parameter.get_T(&Input_reads);
+            let have_mu = ahc_parameter.get_mu(&Input_reads);
+
+            if !(have_T) {
+                writeln!(output_file,"Warning: You don't specify temperature when calculate the anomalous hall conductivity, using default 0.0");
+            }
+            if !(have_mu) {
+                writeln!(output_file,"Warning: You don't specify chemistry potential when calculate the anomalous hall conductivity, using default 0.0");
+            }
+            let kvec = ahc_parameter.get_mesh_vec();
+
+            //传输 ahc_parameter
+            let mut serialized_data = serialize(&ahc_parameter).unwrap();
+            let mut data_size = serialized_data.len();
+            world.process_at_rank(0).broadcast_into(&mut data_size);
+            world
+                .process_at_rank(0)
+                .broadcast_into(&mut serialized_data[..]);
+            //分发kvec
+            //这里, 我们采用尽可能地均分策略, 先求出 nk 对 size 地余数,
+            //然后将余数分给排头靠前的rank
+            let mut nk = ahc_parameter.nk();
+            world.process_at_rank(0).broadcast_into(&mut nk);
+            let remainder: usize = nk % size as usize;
+            let chunk_size0 = nk / size as usize;
+            if chunk_size0 == 0 {
+                panic!(
+                    "Error! the num of cpu {} is larger than your k points number {}!",
+                    nk, size
+                );
+            }
+            println!("remainder={},chunk_size0={}", remainder, chunk_size0);
+            let chunk_size = if remainder > 0 {
+                chunk_size0 + 1
+            } else {
+                chunk_size0
+            };
+            let mut start = chunk_size;
+            let mut end = 0;
+            for i in 1..size {
+                let chunk_size = if (i as usize) < remainder {
+                    chunk_size0 + 1
+                } else {
+                    chunk_size0
+                };
+                world.process_at_rank(i).send(&chunk_size);
+                end = start + chunk_size;
+                let chunk: Array2<f64> = kvec.slice(s![start..end, ..]).to_owned();
+                let mut chunk: Vec<f64> = chunk.into_iter().collect();
+                world.process_at_rank(i).send(&chunk);
+                start = end;
+            }
+            //分发结束
+            let chunk = kvec.slice(s![0..chunk_size, ..]).to_owned();
+            let mut conductivity: Array2<f64> =
+                Anomalous_Hall_conductivity(&model, &chunk, ahc_parameter);
+
+            for i in 1..size {
+                let mut received_size: usize = 0;
+                world.process_at_rank(i).receive_into(&mut received_size);
+                let mut received_data = vec![0u8; received_size];
+                world
+                    .process_at_rank(i)
+                    .receive_into(&mut received_data[..]);
+                // 反序列化
+                let conductivity0: Array2<f64> = deserialize(&received_data).unwrap();
+                conductivity = conductivity + conductivity0;
+            }
+            let mu = ahc_parameter.mu();
+            let n_mu = mu.len();
+            let mu_min = mu[[0]];
+            let mu_max = mu[[n_mu - 1]];
+            conductivity = conductivity / (nk as f64) / model.lat.det().unwrap()
+                * Quantum_conductivity
+                * 1.0e8;
+            println!("The ahc conductivity calculation is finished");
+            writeln!(output_file, "calculation finished");
+            //开始写入
+            writeln!(
+                output_file,
+                "write data in ahc_conductivity_A.dat and ahc_conductivity_S.dat"
+            );
+            let mut AHC_file = File::create("ahc_conductivity.dat")
+                .expect("Unable to create ahc_conductivity.dat");
+            let mut input_string = String::new();
+            input_string.push_str("#Calculation results are reported in units of Ω^-1 cm^-1\n");
+            input_string.push_str("#The arranged data are: mu,  omega_xy, omega_yz, omega_xz\n");
+            for i in 0..conductivity.len_of(Axis(1)) {
+                input_string.push_str(&format!(
+                    "{:11.8}    {:11.8}    {:11.8}    {:11.8}\n",
+                    mu[[i]],
+                    conductivity[[0, i]],
+                    conductivity[[1, i]],
+                    conductivity[[2, i]]
+                ));
+            }
+            writeln!(AHC_file, "{}", &input_string);
+
+            //---------------------开始绘图------------------------
+
+            for (row_idx, component) in ["xy", "yz", "xz"].iter().enumerate() {
+                let mut fg = Figure::new();
+                let x: Vec<f64> = mu.to_vec();
+                let axes = fg.axes2d();
+                let y: Vec<f64> = conductivity.row(row_idx).to_owned().to_vec();
+                axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
+                let axes = axes.set_x_range(Fix(mu_min), Fix(mu_max));
+                axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+                axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+                axes.set_y_label(
+                    &format!("{{/Symbol s}}_{{{0}}} (Ω^{{-1}} cm^{{-1}})", component),
+                    &[Font("Times New Roman", 18.0)],
+                );
+                axes.set_x_label("μ (eV)", &[Font("Times New Roman", 18.0)]);
+
+                let mut pdf_name = format!("AHC_{}.pdf", component);
+                fg.set_terminal("pdfcairo", &pdf_name);
+                fg.show();
+            }
+        } else {
+            let mut received_size: usize = 0;
+            world.process_at_rank(0).broadcast_into(&mut received_size);
+
+            // 根据接收到的大小分配接收缓冲区
+            let mut received_data = vec![0u8; received_size];
+            world
+                .process_at_rank(0)
+                .broadcast_into(&mut received_data[..]);
+            // 反序列化
+            let ahc_parameter: AHC_parameter = deserialize(&received_data).unwrap();
+            //接受 ahc_paramter 结束, 开始接受kvec
+            let mut nk: usize = 0;
+            world.process_at_rank(0).broadcast_into(&mut nk);
+            let mut chunk_size = 0;
+            world.process_at_rank(0).receive_into(&mut chunk_size);
+            let mut recv_chunk = vec![0.0; chunk_size * 3];
+            world.process_at_rank(0).receive_into(&mut recv_chunk);
+            let chunk = Array1::from_vec(recv_chunk)
+                .into_shape((chunk_size, 3))
+                .unwrap();
+            //接受kvec 开始计算 anomalous Hall effect
+            let conductivity: Array2<f64> =
+                Anomalous_Hall_conductivity(&model, &chunk, ahc_parameter);
+
+            //传输 conductivity 到rank0
+            let mut serialized_data = serialize(&conductivity).unwrap();
+            let mut data_size = serialized_data.len();
+            world.process_at_rank(0).send(&mut data_size);
+            world.process_at_rank(0).send(&mut serialized_data[..]);
+        }
+    }
 }

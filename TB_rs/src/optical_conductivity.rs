@@ -29,6 +29,7 @@ use std::f64::consts::PI;
 use std::ops::AddAssign;
 use std::time::{Duration, Instant};
 use Rustb::Model;
+use Rustb::Gauge;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct OC_parameter {
@@ -260,7 +261,7 @@ pub fn optical_geometry_onek<S: Data<Elem = f64>>(
     //! $$ \sum_n f_n\Omega_{n,\ap\bt}^\gm(\bm k)=\sum_n \f{1}{e^{(\ve_{n\bm k}-\mu)/T/k_B}+1} \sum_{m=\not n}\f{J_{\ap,nm}^\gm v_{\bt,mn}}{(\ve_{n\bm k}-\ve_{m\bm k})^2-(\og+i\eta)^2}$$
     //! 其中 $J_\ap^\gm=\\{s_\gm,v_\ap\\}$
     let li: Complex<f64> = 1.0 * Complex::i();
-    let (mut A, hamk): (Array3<Complex<f64>>, Array2<Complex<f64>>) = model.gen_v(k_vec);
+    let (mut A, hamk): (Array3<Complex<f64>>, Array2<Complex<f64>>) = model.gen_v(k_vec,Gauge::Lattice);
     let (band, evec) = if let Ok((eigvals, eigvecs)) = hamk.eigh(UPLO::Lower) {
         (eigvals, eigvecs)
     } else {

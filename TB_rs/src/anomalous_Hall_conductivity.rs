@@ -8,6 +8,7 @@ use std::f64::consts::PI;
 use std::ops::AddAssign;
 use std::time::{Duration, Instant};
 use Rustb::Model;
+use Rustb::Gauge;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct AHC_parameter {
@@ -177,7 +178,7 @@ pub fn anomalous_Hall_onek<S: Data<Elem = f64>>(
     //! 其中 $J_\ap^\gm=\\{s_\gm,v_\ap\\}$
     let li: Complex<f64> = 1.0 * Complex::i();
     //产生速度算符A和哈密顿量
-    let (mut A, hamk): (Array3<Complex<f64>>, Array2<Complex<f64>>) = model.gen_v(k_vec);
+    let (mut A, hamk): (Array3<Complex<f64>>, Array2<Complex<f64>>) = model.gen_v(k_vec,Gauge::Lattice);
     //计算本征值和本征态
     let (band, evec) = if let Ok((eigvals, eigvecs)) = hamk.eigh(UPLO::Lower) {
         (eigvals, eigvecs)
@@ -211,22 +212,24 @@ pub fn anomalous_Hall_onek<S: Data<Elem = f64>>(
     let A_xy = A_xy.mapv(|x| x.im);
     let A_yz = A_yz.mapv(|x| x.im);
     let A_xz = A_xz.mapv(|x| x.im);
+    let A_xy = (&A_xy * &UU0).sum_axis(Axis(1));
+    let A_yz = (&A_yz * &UU0).sum_axis(Axis(1));
+    let A_xz = (&A_xz * &UU0).sum_axis(Axis(1));
 
     mu.iter()
         .zip(berry_curvature.axis_iter_mut(Axis(1)))
         .for_each(|(u, mut O)| {
-
-            let fermi_dirac = if T ==0.0{
-                band.mapv(|x| if x > *u {0.0} else {1.0})
-            }else{
+            let fermi_dirac = if T == 0.0 {
+                band.mapv(|x| if x > *u { 0.0 } else { 1.0 })
+            } else {
                 let beta = 1.0 / T / 8.617e-5;
                 band.mapv(|x| ((beta * (x - u)).exp() + 1.0).recip())
             };
-            O[[0]] += (&A_xy * &UU0).sum_axis(Axis(1)).dot(&fermi_dirac);
-            O[[1]] += (&A_yz * &UU0).sum_axis(Axis(1)).dot(&fermi_dirac);
-            O[[2]] += (&A_xz * &UU0).sum_axis(Axis(1)).dot(&fermi_dirac);
+            O[[0]] += A_xy.dot(&fermi_dirac);
+            O[[1]] += A_yz.dot(&fermi_dirac);
+            O[[2]] += A_xz.dot(&fermi_dirac);
         });
-    -2.0*berry_curvature
+    -2.0 * berry_curvature
 }
 
 pub fn Anomalous_Hall_conductivity(

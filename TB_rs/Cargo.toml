@@ -15,5 +15,6 @@ ndarray = { version = "0.16.1", features = ["serde"] }
 ndarray-linalg = { version = "0.17.0", features = ["intel-mkl-system"] }
 num-complex = "0.4.6"
 serde = { version = "1.0.215", features = ["derive"] }
+zstd = "0.13.3"
 
 

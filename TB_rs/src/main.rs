@@ -24,12 +24,14 @@ pub mod cons;
 pub mod optical_conductivity;
 pub mod read_model;
 pub mod spin_current;
+pub mod berry_curvature_dipole_conductivity;
 use crate::anomalous_Hall_conductivity::*;
 use crate::band_plot::k_path;
 use crate::cons::spin_direction;
 use crate::optical_conductivity::OC_parameter;
 use crate::optical_conductivity::Optical_conductivity;
 use crate::spin_current::{spin_current_conductivity, SC_parameter};
+use crate::berry_curvature_dipole_conductivity::{berry_curvature_dipole_conductivity_calculate, BCD_parameter};
 use bincode::{deserialize, serialize};
 use gnuplot::AutoOption::*;
 use gnuplot::AxesCommon;
@@ -61,6 +63,7 @@ struct Control {
     optical_conductivity: bool,
     anomalous_Hall_conductivity: bool,
     spin_current_conductivity: bool,
+    berry_curvature_dipole_conductivity:bool,
 }
 
 impl Control {
@@ -70,6 +73,7 @@ impl Control {
             optical_conductivity: false,
             anomalous_Hall_conductivity: false,
             spin_current_conductivity: false,
+            berry_curvature_dipole_conductivity:false,
         }
     }
 }
@@ -118,6 +122,7 @@ fn main() {
             s.truncate(s.len() - 1);
         }
     });
+
     //初始化各种控制语句
     let mut seed_name = TB_file::new();
     let mut control = Control::new();
@@ -179,8 +184,16 @@ fn main() {
                 control.spin_current_conductivity = true;
             }
         }
+
+        if i.contains("berry_curvature_dipole_conductivity") {
+            let parts: Vec<&str> = i.split('=').collect();
+            if parts.len() == 2 && (parts[1].contains("T") || parts[1].contains("t")) {
+                control.berry_curvature_dipole_conductivity = true;
+            }
+        }
     }
-    //开始读取TB 文件
+
+    //开始读取模型文件
 
     let model = read_model(&world, seed_name, &mut output_file);
     world.barrier();
@@ -202,5 +215,10 @@ fn main() {
 
     if control.spin_current_conductivity {
         spin_current_calculate(&world, &model, &Input_reads, &mut output_file)
+    }
+
+
+    if control.berry_curvature_dipole_conductivity {
+        berry_curvature_dipole_conductivity_calculate(&world, &model, &Input_reads, &mut output_file)
     }
 }

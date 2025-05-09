@@ -17,6 +17,14 @@ use Rustb::phy_const::*;
 use Rustb::Gauge;
 use Rustb::Model;
 
+
+/// This module calculates the anomalous Hall conductivity
+/// The adopted definition is
+/// $$\sigma_{\ap\bt}=\f{e^2}{\hbar V}\sum_{\bm k}\sum_{n} f_n \Og_{n,\ap\bt}$$
+/// Where
+///$$ \Og_{n\ap\bt}=\sum_{m=\not n}\f{-2 \text{Im} \bra{\psi_{n\bm k}}\p_\ap H\ket{\psi_{m\bm k}}\bra{\psi_{m\bm k}}\p_\bt H\ket{\psi_{n\bm k}}}{(\ve_{n\bm k}-\ve_{m\bm k})^2}$$
+
+
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct AHC_parameter {
     ///Brillouin zone k point number
@@ -161,15 +169,6 @@ impl AHC_parameter {
     }
 }
 
-/// This module calculates the optical conductivity
-/// The adopted definition is
-/// $$\sigma_{\ap\bt}=\f{2ie^2\hbar}{V}\sum_{\bm k}\sum_{n} f_n (g_{n,\ap\bt}+\f{i}{2}\Og_{n,\ap\bt})$$
-///
-/// Where
-/// $$\\begin{aligned}
-/// \Og_{n\ap\bt}&=\sum_{m=\not n}\f{-2 \text{Im} \bra{\psi_{n\bm k}}\p_\ap H\ket{\psi_{m\bm k}}\bra{\psi_{m\bm k}}\p_\bt H\ket{\psi_{n\bm k}}}{(\ve_{n\bm k}-\ve_{m\bm k})^2}
-/// \\end{aligned}
-/// $$
 
 pub fn anomalous_Hall_onek<S: Data<Elem = f64>>(
     model: &Model,
@@ -177,12 +176,6 @@ pub fn anomalous_Hall_onek<S: Data<Elem = f64>>(
     T: f64,
     mu: &Array1<f64>,
 ) -> Array2<f64> {
-    //!给定一个 k 点, 指定 dir_1=$\alpha$, dir_2=$\beta$, T 代表温度, og= $\og$,
-    //!mu=$\mu$ 为费米能级范围, spin=0,1,2,3 为$\sg_0,\sg_x,\sg_y,\sg_z$,
-    //!当体系不存在自旋的时候无论如何输入spin都默认 spin=0
-    //! 这个函数返回的是
-    //! $$ \sum_n f_n\Omega_{n,\ap\bt}^\gm(\bm k)=\sum_n \f{1}{e^{(\ve_{n\bm k}-\mu)/T/k_B}+1} \sum_{m=\not n}\f{J_{\ap,nm}^\gm v_{\bt,mn}}{(\ve_{n\bm k}-\ve_{m\bm k})^2}$$
-    //! 其中 $J_\ap^\gm=\\{s_\gm,v_\ap\\}$
     let li: Complex<f64> = 1.0 * Complex::i();
     //产生速度算符A和哈密顿量
     let (mut A, hamk): (Array3<Complex<f64>>, Array2<Complex<f64>>) =
@@ -200,7 +193,7 @@ pub fn anomalous_Hall_onek<S: Data<Elem = f64>>(
     let A_x: Array2<Complex<f64>> = A.slice(s![0, .., ..]).to_owned();
     let A_y: Array2<Complex<f64>> = A.slice(s![1, .., ..]).to_owned();
     let A_z: Array2<Complex<f64>> = A.slice(s![2, .., ..]).to_owned();
-    let _=A;
+    let _ = A;
     let A_x = A_x.dot(&evec);
     let A_y = A_y.dot(&evec);
     let A_z = A_z.dot(&evec);
@@ -221,9 +214,15 @@ pub fn anomalous_Hall_onek<S: Data<Elem = f64>>(
     let A_xy = A_xy.mapv(|x| x.im);
     let A_yz = A_yz.mapv(|x| x.im);
     let A_xz = A_xz.mapv(|x| x.im);
-    let A_xy = (&A_xy * &UU0).sum_axis(Axis(1));
-    let A_yz = (&A_yz * &UU0).sum_axis(Axis(1));
-    let A_xz = (&A_xz * &UU0).sum_axis(Axis(1));
+    //let A_xy = (&A_xy * &UU0).sum_axis(Axis(1));
+    //let A_yz = (&A_yz * &UU0).sum_axis(Axis(1));
+    //let A_xz = (&A_xz * &UU0).sum_axis(Axis(1));
+    let A_xy =A_xy.outer_iter().zip(UU0.outer_iter()).map(|(a, b)| a.dot(&b)).collect();
+    let A_yz =A_yz.outer_iter().zip(UU0.outer_iter()).map(|(a, b)| a.dot(&b)).collect();
+    let A_xz =A_xz.outer_iter().zip(UU0.outer_iter()).map(|(a, b)| a.dot(&b)).collect();
+    let A_xy =Array1::from_vec(A_xy);
+    let A_yz =Array1::from_vec(A_yz);
+    let A_xz =Array1::from_vec(A_xz);
 
     mu.iter()
         .zip(berry_curvature.axis_iter_mut(Axis(1)))
@@ -268,169 +267,167 @@ pub fn anomalous_Hall_conductivity_calculate(
     let size = world.size();
     let rank = world.rank();
 
-        //开始计算反常Hall 电导
-        if rank == 0 {
+    //开始计算反常Hall 电导
+    if rank == 0 {
+        writeln!(
+            output_file.as_mut().unwrap(),
+            "start calculatiing the anomalous Hall conductivity"
+        );
+        println!("start calculatiing the anomalous Hall");
+        let mut ahc_parameter = AHC_parameter::new();
+        let have_kmesh = ahc_parameter.get_k_mesh(&Input_reads);
+        if !have_kmesh {
             writeln!(
                 output_file.as_mut().unwrap(),
-                "start calculatiing the anomalous Hall conductivity"
+                "Error: You mut set k_mesh for calculating anomalous Hall conductivity"
             );
-            println!("start calculatiing the anomalous Hall");
-            let mut ahc_parameter = AHC_parameter::new();
-            let have_kmesh = ahc_parameter.get_k_mesh(&Input_reads);
-            if !have_kmesh {
-                writeln!(
-                    output_file.as_mut().unwrap(),
-                    "Error: You mut set k_mesh for calculating anomalous Hall conductivity"
-                );
-            }
-            let have_T = ahc_parameter.get_T(&Input_reads);
-            let have_mu = ahc_parameter.get_mu(&Input_reads);
+        }
+        let have_T = ahc_parameter.get_T(&Input_reads);
+        let have_mu = ahc_parameter.get_mu(&Input_reads);
 
-            if !(have_T) {
-                writeln!(output_file.as_mut().unwrap(),"Warning: You don't specify temperature when calculate the anomalous hall conductivity, using default 0.0");
-            }
-            if !(have_mu) {
-                writeln!(output_file.as_mut().unwrap(),"Warning: You don't specify chemistry potential when calculate the anomalous hall conductivity, using default 0.0");
-            }
-            let kvec = ahc_parameter.get_mesh_vec();
+        if !(have_T) {
+            writeln!(output_file.as_mut().unwrap(),"Warning: You don't specify temperature when calculate the anomalous hall conductivity, using default 0.0");
+        }
+        if !(have_mu) {
+            writeln!(output_file.as_mut().unwrap(),"Warning: You don't specify chemistry potential when calculate the anomalous hall conductivity, using default 0.0");
+        }
+        let kvec = ahc_parameter.get_mesh_vec();
 
-            //传输 ahc_parameter
-            let mut serialized_data = serialize(&ahc_parameter).unwrap();
-            let mut data_size = serialized_data.len();
-            world.process_at_rank(0).broadcast_into(&mut data_size);
-            world
-                .process_at_rank(0)
-                .broadcast_into(&mut serialized_data[..]);
-            //分发kvec
-            //这里, 我们采用尽可能地均分策略, 先求出 nk 对 size 地余数,
-            //然后将余数分给排头靠前的rank
-            let mut nk = ahc_parameter.nk();
-            world.process_at_rank(0).broadcast_into(&mut nk);
-            let remainder: usize = nk % size as usize;
-            let chunk_size0 = nk / size as usize;
-            if chunk_size0 == 0 {
-                panic!(
-                    "Error! the num of cpu {} is larger than your k points number {}!",
-                    nk, size
-                );
-            }
-            println!("remainder={},chunk_size0={}", remainder, chunk_size0);
-            let chunk_size = if remainder > 0 {
+        //传输 ahc_parameter
+        let mut serialized_data = serialize(&ahc_parameter).unwrap();
+        let mut data_size = serialized_data.len();
+        world.process_at_rank(0).broadcast_into(&mut data_size);
+        world
+            .process_at_rank(0)
+            .broadcast_into(&mut serialized_data[..]);
+        //分发kvec
+        //这里, 我们采用尽可能地均分策略, 先求出 nk 对 size 地余数,
+        //然后将余数分给排头靠前的rank
+        let mut nk = ahc_parameter.nk();
+        world.process_at_rank(0).broadcast_into(&mut nk);
+        let remainder: usize = nk % size as usize;
+        let chunk_size0 = nk / size as usize;
+        if chunk_size0 == 0 {
+            panic!(
+                "Error! the num of cpu {} is larger than your k points number {}!",
+                nk, size
+            );
+        }
+        println!("remainder={},chunk_size0={}", remainder, chunk_size0);
+        let chunk_size = if remainder > 0 {
+            chunk_size0 + 1
+        } else {
+            chunk_size0
+        };
+        let mut start = chunk_size;
+        let mut end = 0;
+        for i in 1..size {
+            let chunk_size = if (i as usize) < remainder {
                 chunk_size0 + 1
             } else {
                 chunk_size0
             };
-            let mut start = chunk_size;
-            let mut end = 0;
-            for i in 1..size {
-                let chunk_size = if (i as usize) < remainder {
-                    chunk_size0 + 1
-                } else {
-                    chunk_size0
-                };
-                world.process_at_rank(i).send(&chunk_size);
-                end = start + chunk_size;
-                let chunk: Array2<f64> = kvec.slice(s![start..end, ..]).to_owned();
-                let mut chunk: Vec<f64> = chunk.into_iter().collect();
-                world.process_at_rank(i).send(&chunk);
-                start = end;
-            }
-            //分发结束
-            let chunk = kvec.slice(s![0..chunk_size, ..]).to_owned();
-            let mut conductivity: Array2<f64> =
-                Anomalous_Hall_conductivity(&model, &chunk, ahc_parameter);
+            world.process_at_rank(i).send(&chunk_size);
+            end = start + chunk_size;
+            let chunk: Array2<f64> = kvec.slice(s![start..end, ..]).to_owned();
+            let mut chunk: Vec<f64> = chunk.into_iter().collect();
+            world.process_at_rank(i).send(&chunk);
+            start = end;
+        }
+        //分发结束
+        let chunk = kvec.slice(s![0..chunk_size, ..]).to_owned();
+        let mut conductivity: Array2<f64> =
+            Anomalous_Hall_conductivity(&model, &chunk, ahc_parameter);
 
-            for i in 1..size {
-                let mut received_size: usize = 0;
-                world.process_at_rank(i).receive_into(&mut received_size);
-                let mut received_data = vec![0u8; received_size];
-                world
-                    .process_at_rank(i)
-                    .receive_into(&mut received_data[..]);
-                // 反序列化
-                let conductivity0: Array2<f64> = deserialize(&received_data).unwrap();
-                conductivity = conductivity + conductivity0;
-            }
-            let mu = ahc_parameter.mu();
-            let n_mu = mu.len();
-            let mu_min = mu[[0]];
-            let mu_max = mu[[n_mu - 1]];
-            conductivity = conductivity / (nk as f64) / model.lat.det().unwrap()
-                * Quantum_conductivity
-                * 1.0e8;
-            println!("The ahc conductivity calculation is finished");
-            writeln!(output_file.as_mut().unwrap(), "calculation finished");
-            //开始写入
-            writeln!(
-                output_file.as_mut().unwrap(),
-                "write data in ahc_conductivity_A.dat and ahc_conductivity_S.dat"
-            );
-            let mut AHC_file = File::create("ahc_conductivity.dat")
-                .expect("Unable to create ahc_conductivity.dat");
-            let mut input_string = String::new();
-            input_string.push_str("#Calculation results are reported in units of Ω^-1 cm^-1\n");
-            input_string.push_str("#The arranged data are: mu,  omega_xy, omega_yz, omega_xz\n");
-            for i in 0..conductivity.len_of(Axis(1)) {
-                input_string.push_str(&format!(
-                    "{:>15.8}    {:>15.8}    {:>15.8}    {:>15.8}\n",
-                    mu[[i]],
-                    conductivity[[0, i]],
-                    conductivity[[1, i]],
-                    conductivity[[2, i]]
-                ));
-            }
-            writeln!(AHC_file, "{}", &input_string);
-
-            //---------------------开始绘图------------------------
-
-            for (row_idx, component) in ["xy", "yz", "xz"].iter().enumerate() {
-                let mut fg = Figure::new();
-                let x: Vec<f64> = mu.to_vec();
-                let axes = fg.axes2d();
-                let y: Vec<f64> = conductivity.row(row_idx).to_owned().to_vec();
-                axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
-                let axes = axes.set_x_range(Fix(mu_min), Fix(mu_max));
-                axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-                axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
-                axes.set_y_label(
-                    &format!("{{/Symbol s}}_{{{0}}} (Ω^{{-1}} cm^{{-1}})", component),
-                    &[Font("Times New Roman", 18.0)],
-                );
-                axes.set_x_label("μ (eV)", &[Font("Times New Roman", 18.0)]);
-
-                let mut pdf_name = format!("AHC_{}.pdf", component);
-                fg.set_terminal("pdfcairo", &pdf_name);
-                fg.show();
-            }
-        } else {
+        for i in 1..size {
             let mut received_size: usize = 0;
-            world.process_at_rank(0).broadcast_into(&mut received_size);
-
-            // 根据接收到的大小分配接收缓冲区
+            world.process_at_rank(i).receive_into(&mut received_size);
             let mut received_data = vec![0u8; received_size];
             world
-                .process_at_rank(0)
-                .broadcast_into(&mut received_data[..]);
+                .process_at_rank(i)
+                .receive_into(&mut received_data[..]);
             // 反序列化
-            let ahc_parameter: AHC_parameter = deserialize(&received_data).unwrap();
-            //接受 ahc_paramter 结束, 开始接受kvec
-            let mut nk: usize = 0;
-            world.process_at_rank(0).broadcast_into(&mut nk);
-            let mut chunk_size = 0;
-            world.process_at_rank(0).receive_into(&mut chunk_size);
-            let mut recv_chunk = vec![0.0; chunk_size * 3];
-            world.process_at_rank(0).receive_into(&mut recv_chunk);
-            let chunk = Array1::from_vec(recv_chunk)
-                .into_shape((chunk_size, 3))
-                .unwrap();
-            //接受kvec 开始计算 anomalous Hall effect
-            let conductivity: Array2<f64> =
-                Anomalous_Hall_conductivity(&model, &chunk, ahc_parameter);
-
-            //传输 conductivity 到rank0
-            let mut serialized_data = serialize(&conductivity).unwrap();
-            let mut data_size = serialized_data.len();
-            world.process_at_rank(0).send(&mut data_size);
-            world.process_at_rank(0).send(&mut serialized_data[..]);
+            let conductivity0: Array2<f64> = deserialize(&received_data).unwrap();
+            conductivity = conductivity + conductivity0;
         }
+        let mu = ahc_parameter.mu();
+        let n_mu = mu.len();
+        let mu_min = mu[[0]];
+        let mu_max = mu[[n_mu - 1]];
+        conductivity =
+            conductivity / (nk as f64) / model.lat.det().unwrap() * Quantum_conductivity * 1.0e8;
+        println!("The ahc conductivity calculation is finished");
+        writeln!(output_file.as_mut().unwrap(), "calculation finished");
+        //开始写入
+        writeln!(
+            output_file.as_mut().unwrap(),
+            "write data in ahc_conductivity_A.dat and ahc_conductivity_S.dat"
+        );
+        let mut AHC_file =
+            File::create("ahc_conductivity.dat").expect("Unable to create ahc_conductivity.dat");
+        let mut input_string = String::new();
+        input_string.push_str("#Calculation results are reported in units of Ω^-1 cm^-1\n");
+        input_string.push_str("#The arranged data are: mu,  omega_xy, omega_yz, omega_xz\n");
+        for i in 0..conductivity.len_of(Axis(1)) {
+            input_string.push_str(&format!(
+                "{:>15.8}    {:>15.8}    {:>15.8}    {:>15.8}\n",
+                mu[[i]],
+                conductivity[[0, i]],
+                conductivity[[1, i]],
+                conductivity[[2, i]]
+            ));
+        }
+        writeln!(AHC_file, "{}", &input_string);
+
+        //---------------------开始绘图------------------------
+
+        for (row_idx, component) in ["xy", "yz", "xz"].iter().enumerate() {
+            let mut fg = Figure::new();
+            let x: Vec<f64> = mu.to_vec();
+            let axes = fg.axes2d();
+            let y: Vec<f64> = conductivity.row(row_idx).to_owned().to_vec();
+            axes.lines(&x, &y, &[Color("blue"), LineStyle(Solid)]);
+            let axes = axes.set_x_range(Fix(mu_min), Fix(mu_max));
+            axes.set_x_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_ticks(Some((Auto, 0)), &[], &[Font("Times New Roman", 18.0)]);
+            axes.set_y_label(
+                &format!("{{/Symbol s}}_{{{0}}} (Ω^{{-1}} cm^{{-1}})", component),
+                &[Font("Times New Roman", 18.0)],
+            );
+            axes.set_x_label("μ (eV)", &[Font("Times New Roman", 18.0)]);
+
+            let mut pdf_name = format!("AHC_{}.pdf", component);
+            fg.set_terminal("pdfcairo", &pdf_name);
+            fg.show();
+        }
+    } else {
+        let mut received_size: usize = 0;
+        world.process_at_rank(0).broadcast_into(&mut received_size);
+
+        // 根据接收到的大小分配接收缓冲区
+        let mut received_data = vec![0u8; received_size];
+        world
+            .process_at_rank(0)
+            .broadcast_into(&mut received_data[..]);
+        // 反序列化
+        let ahc_parameter: AHC_parameter = deserialize(&received_data).unwrap();
+        //接受 ahc_paramter 结束, 开始接受kvec
+        let mut nk: usize = 0;
+        world.process_at_rank(0).broadcast_into(&mut nk);
+        let mut chunk_size = 0;
+        world.process_at_rank(0).receive_into(&mut chunk_size);
+        let mut recv_chunk = vec![0.0; chunk_size * 3];
+        world.process_at_rank(0).receive_into(&mut recv_chunk);
+        let chunk = Array1::from_vec(recv_chunk)
+            .into_shape((chunk_size, 3))
+            .unwrap();
+        //接受kvec 开始计算 anomalous Hall effect
+        let conductivity: Array2<f64> = Anomalous_Hall_conductivity(&model, &chunk, ahc_parameter);
+
+        //传输 conductivity 到rank0
+        let mut serialized_data = serialize(&conductivity).unwrap();
+        let mut data_size = serialized_data.len();
+        world.process_at_rank(0).send(&mut data_size);
+        world.process_at_rank(0).send(&mut serialized_data[..]);
+    }
 }

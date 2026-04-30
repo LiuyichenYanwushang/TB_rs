@@ -10,6 +10,7 @@ build="build.rs"
 Rustb = {path="../Rustb", features = ["intel-mkl-system"]}
 bincode = "1.3.3"
 gnuplot = "0.0.44"
+katex = "0.4.6"
 mpi = {version="0.8.0"}
 ndarray = { version = "0.16.1", features = ["serde"] }
 ndarray-linalg = { version = "0.17.0", features = ["intel-mkl-system"] }

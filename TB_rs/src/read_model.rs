@@ -39,7 +39,7 @@ pub fn read_model(
         } else {
             //开始读取数据
             writeln!(output_file.as_mut().unwrap(), "Loading the model...");
-            let model = Model::from_hr("./", &seed_name.seed_name.unwrap(), seed_name.fermi_energy);
+            let model = Model::from_hr("./", &seed_name.seed_name.unwrap(), seed_name.fermi_energy).expect("Can not get the model");
             writeln!(
                 output_file.as_mut().unwrap(),
                 "The tight binding model is loaded"

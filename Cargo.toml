@@ -3,6 +3,7 @@ members = [
   "TB_rs",
   "Rustb",
   "Rustb4py",
+  "cryspglib",
 ]
 resolver = "2"
 

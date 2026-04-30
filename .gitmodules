@@ -1,3 +1,6 @@
 [submodule "Rustb"]
 	path = Rustb
 	url = git@github.com:LiuyichenYanwushang/Rustb.git
+[submodule "cryspglib"]
+	path = cryspglib
+	url = git@github.com:LiuyichenYanwushang/cryspglib.git

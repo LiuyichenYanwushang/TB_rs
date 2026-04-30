@@ -10,10 +10,10 @@ name = "Rustb4py"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.20.0", features = ["extension-module"] }
-ndarray = { version = "0.15.6", features = ["rayon", "matrixmultiply-threading"] }  # Remove "blas" feature
+pyo3 = { version = "0.26.0", features = ["extension-module"] }
+ndarray = { version = "0.16.1", features = ["rayon", "serde"] }
 num-complex = "0.4.4"
-ndarray-linalg = { version = "0.16.0",features=["intel-mkl-static"]}  # Ensure no BLAS-related features are enabled
-numpy = "0.20.0"
+ndarray-linalg = { version = "0.17.0", default-features = false }
+numpy = { version = "0.26.0", default-features = false }
 Rustb = { path = "../Rustb" }
 

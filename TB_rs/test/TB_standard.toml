@@ -1,0 +1,30 @@
+[model]
+seed_name = "wannier90"
+fermi_energy = 7.2752
+
+[bands]
+enable = true  
+num_points = 3001  
+kpoint_path = [
+    ["Γ", 0.0, 0.0, 0.0, "C", 0.3487843404, 0.3487843404, 0.0],
+    ["C_2", -0.3487843404, 0.6512156596, 0.0, "Y_2", -0.5, 0.5, 0.0],
+    ["Y_2", -0.5, 0.5, 0.0, "Γ", 0.0, 0.0, 0.0],
+]
+
+[optical]
+enable = true
+k_mesh = [10, 10, 10]
+broaden_energy = 0.1
+temperature = 0.0
+frequency = { min = 0.0, max = 3.0, num = 1001 }
+
+[anomalous_hall]
+enable = true
+chemical_potential = { min = -2.0, max = 2.0, num = 200 }
+temperature = 0.0
+
+[spin_current]
+enable = true
+chemical_potential = { min = -2.0, max = 2.0, num = 200 }
+broaden_energy = 0.01
+spin_direction = 0

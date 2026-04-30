@@ -1,9 +1,12 @@
 seed_name= wannier90
 fermi_energy = 7.2752
 //绘制体能带
-band_plot= False
+band_plot= True
 //绘制光电导随光频率的变化图
-optical_conductivity = True 
+optical_conductivity = False
+anomalous_Hall_conductivity=False
+spin_current_conductivity = True
+berry_curvature_dipole_conductivity = False
 
 
 begin kpoint_path
@@ -17,12 +20,21 @@ A        0.0000000000   0.0000000000   0.5000000000       Γ     0.0000000000   
 L_2      0.0000000000   0.5000000000   0.5000000000       Γ     0.0000000000   0.0000000000   0.0000000000   
 Γ    0.0000000000   0.0000000000   0.0000000000       V_2       0.0000000000   0.5000000000   0.0000000000   
 end kpoint_path
-bands_num_points = 21
+bands_num_points = 3001
 
-k_mesh= 20 20 20
-broaden_energy= 0.1
+//optical_conductivity 计算时采用的k_mesh
+k_mesh= 50 50 50
+// 能量展宽
+broaden_energy= 0.0
+//体系温度
 temperature = 0.0
-chemical_potential = 0.0
+//化学势
+//chemical_potential = 0.0
+//入射光频率
 frenquency_min = 0.0
 frenquency_max = 3.0 
-frenquency_num = 3001
+frenquency_num = 1001
+chemical_potential_min = -2.0
+chemical_potential_max = 2.0;
+chemical_potential_num = 2000
+spin_direction = 0

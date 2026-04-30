@@ -1,29 +1,24 @@
 use bincode::{deserialize, serialize};
 use gnuplot::AxesCommon;
-use gnuplot::{Auto, Caption, Color, Figure, Fix, Font, LineStyle, Solid};
+use gnuplot::{Auto, Color, Figure, Fix, Font, LineStyle, Solid};
 use mpi::request::WaitGuard;
 use mpi::traits::*;
 use ndarray::*;
 use ndarray_linalg::*;
 use num_complex::Complex;
 use serde::{Deserialize, Serialize};
-use std::fs::create_dir_all;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Write;
 use std::ops::AddAssign;
-use std::path::Path;
-use std::time::{Duration, Instant};
 use Rustb::phy_const::*;
 use Rustb::Gauge;
 use Rustb::Model;
-
 
 /// This module calculates the anomalous Hall conductivity
 /// The adopted definition is
 /// $$\sigma_{\ap\bt}=\f{e^2}{\hbar V}\sum_{\bm k}\sum_{n} f_n \Og_{n,\ap\bt}$$
 /// Where
 ///$$ \Og_{n\ap\bt}=\sum_{m=\not n}\f{-2 \text{Im} \bra{\psi_{n\bm k}}\p_\ap H\ket{\psi_{m\bm k}}\bra{\psi_{m\bm k}}\p_\bt H\ket{\psi_{n\bm k}}}{(\ve_{n\bm k}-\ve_{m\bm k})^2}$$
-
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct AHC_parameter {
@@ -169,7 +164,6 @@ impl AHC_parameter {
     }
 }
 
-
 pub fn anomalous_Hall_onek<S: Data<Elem = f64>>(
     model: &Model,
     k_vec: &ArrayBase<S, Ix1>,
@@ -217,12 +211,24 @@ pub fn anomalous_Hall_onek<S: Data<Elem = f64>>(
     //let A_xy = (&A_xy * &UU0).sum_axis(Axis(1));
     //let A_yz = (&A_yz * &UU0).sum_axis(Axis(1));
     //let A_xz = (&A_xz * &UU0).sum_axis(Axis(1));
-    let A_xy =A_xy.outer_iter().zip(UU0.outer_iter()).map(|(a, b)| a.dot(&b)).collect();
-    let A_yz =A_yz.outer_iter().zip(UU0.outer_iter()).map(|(a, b)| a.dot(&b)).collect();
-    let A_xz =A_xz.outer_iter().zip(UU0.outer_iter()).map(|(a, b)| a.dot(&b)).collect();
-    let A_xy =Array1::from_vec(A_xy);
-    let A_yz =Array1::from_vec(A_yz);
-    let A_xz =Array1::from_vec(A_xz);
+    let A_xy = A_xy
+        .outer_iter()
+        .zip(UU0.outer_iter())
+        .map(|(a, b)| a.dot(&b))
+        .collect();
+    let A_yz = A_yz
+        .outer_iter()
+        .zip(UU0.outer_iter())
+        .map(|(a, b)| a.dot(&b))
+        .collect();
+    let A_xz = A_xz
+        .outer_iter()
+        .zip(UU0.outer_iter())
+        .map(|(a, b)| a.dot(&b))
+        .collect();
+    let A_xy = Array1::from_vec(A_xy);
+    let A_yz = Array1::from_vec(A_yz);
+    let A_xz = Array1::from_vec(A_xz);
 
     mu.iter()
         .zip(berry_curvature.axis_iter_mut(Axis(1)))

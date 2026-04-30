@@ -1,5 +1,3 @@
-TB_rs/test/wannier90_hr.dat
-TB_rs/test/wannier90_wsvec.dat
-TB_rs/test/wannier90_r.dat
 target/
 docs-header.html
+TB_rs/test/wannier90_*.dat
